@@ -1,0 +1,7 @@
+2024-01-17 16:45:52.657 | INFO     | __main__:<module>:133 - loaded config for DO78_2024-01-11_16-00-40_001
+2024-01-17 16:45:59.234 | INFO     | __main__:<module>:133 - loaded config for DO78_2024-01-11_16-00-40_001
+2024-01-17 16:46:55.824 | INFO     | __main__:<module>:133 - loaded config for DO78_2024-01-16_13-35-52_001
+2024-01-17 16:47:02.345 | INFO     | __main__:<module>:133 - loaded config for DO78_2024-01-16_13-35-52_001
+2024-01-17 17:08:15.780 | INFO     | __main__:<module>:133 - loaded config for DO78_2024-01-17_13-57-56_001
+2024-01-17 17:08:15.780 | INFO     | __main__:<module>:133 - loaded config for DO78_2024-01-17_13-57-56_001
+2024-01-17 17:08:16.638 | INFO     | __main__:sort_recording:47 - saving new dir

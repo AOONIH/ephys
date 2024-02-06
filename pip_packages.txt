@@ -1,0 +1,5 @@
+spikeinterface[full,widgets]
+pandas
+matplotlib
+PySide6
+spikeinterface-gui

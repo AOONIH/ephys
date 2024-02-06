@@ -1,0 +1,3 @@
+2024-01-27 16:05:40.335 | INFO     | __main__:<module>:153 - loaded config for DO79_2024-01-26_15-05-05_003
+2024-01-27 16:11:35.635 | INFO     | __main__:<module>:153 - loaded config for DO79_2024-01-26_15-05-05_003
+2024-01-27 16:12:25.979 | INFO     | __main__:<module>:153 - loaded config for DO79_2024-01-27_10-42-26_001

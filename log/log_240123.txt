@@ -1,0 +1,7 @@
+2024-01-23 17:24:56.891 | INFO     | __main__:<module>:133 - loaded config for DO79_2024-01-23_16-56-13_001
+2024-01-23 17:24:57.541 | INFO     | __main__:sort_recording:47 - saving new dir
+2024-01-23 19:25:57.831 | INFO     | __main__:<module>:133 - loaded config for DO79_2024-01-23_18-48-18_003
+2024-01-23 19:25:58.241 | INFO     | __main__:sort_recording:47 - saving new dir
+2024-01-23 19:27:10.781 | INFO     | __main__:<module>:133 - loaded config for DO79_2024-01-23_18-48-18_003
+2024-01-23 23:35:17.383 | INFO     | __main__:<module>:133 - loaded config for DO79_2024-01-23_17-15-17_002
+2024-01-23 23:35:18.824 | INFO     | __main__:sort_recording:47 - saving new dir

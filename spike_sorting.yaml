@@ -1,0 +1,11 @@
+
+# install: conda env create -f spike_sorting.yaml
+# update:  conda env update -f spike_sorting.yaml
+name: spike_sorting
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip: # list needed packages
+    - "numpy"

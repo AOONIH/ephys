@@ -1,0 +1,4 @@
+2024-01-18 12:20:37.650 | INFO     | __main__:<module>:133 - loaded config for DO79_2024-01-17_15-20-19_001
+2024-01-18 12:20:38.557 | INFO     | __main__:sort_recording:47 - saving new dir
+2024-01-18 18:27:40.601 | INFO     | __main__:<module>:133 - loaded config for DO79_2024-01-18_16-10-46_001
+2024-01-18 18:27:41.283 | INFO     | __main__:sort_recording:47 - saving new dir

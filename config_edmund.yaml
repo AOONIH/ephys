@@ -1,0 +1,12 @@
+ceph_dir_linux: '/ceph/akrami'
+ceph_dir_windows: 'X:\'
+home_dir_linux: '/nfs/nhome/live/aonih'
+home_dir_windows: 'H:\'
+recording_dir: ['Edmund','Data','Lorena_pSWM','raw_ephys','LC02','2024-01-30_16-07-48_fordammy']
+sorter: 'kilosort2'
+# sorter: 'spykingcircus2'
+ow_flag: false
+container_flag: true
+sorter_dir_suffix: ''
+block_idx: 0
+probe_name: 'ASSY-236-H9'
