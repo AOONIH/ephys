@@ -150,7 +150,7 @@ if __name__ == "__main__":
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
     folder, sorter_name = config['recording_dir'],config['sorter']
     if args.datadir:
-        folder[1] = args.datadir
+        folder[-1] = args.datadir
     logger.info(f'loaded config for {folder[-1]}')
     ow_flag = config.get('ow_flag',False)
     container_flag = config.get('container_flag', False)
