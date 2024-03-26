@@ -69,7 +69,8 @@ def run_decoder(predictors, features, shuffle=False,model='svc', pre_split=None,
         model_nb = LogisticRegression()
     else:
         raise Warning('Invalid model')
-
+    rand_idxs = np.random.choice(predictors.shape[0],predictors.shape[0],replace=False)
+    predictors, features = predictors[rand_idxs], features[rand_idxs]
     if cv_folds:
         kf = KFold(n_splits=cv_folds,shuffle=True)
         x_train, x_test, y_train, y_test = [], [], [], []
