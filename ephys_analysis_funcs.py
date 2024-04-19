@@ -51,6 +51,8 @@ def posix_from_win(path:str) -> Path:
         path_bits = PureWindowsPath(path).parts
         path_bits = [bit for bit in path_bits if '\\' not in bit]
         return Path(PurePosixPath(*path_bits))
+    else:
+        return Path(path)
 
 
 def get_spikedir(recdir,sorter='kilosort2_5',sorting_dir_name='sorting') -> Path:
@@ -75,18 +77,23 @@ def get_spikedir(recdir,sorter='kilosort2_5',sorting_dir_name='sorting') -> Path
     return spikedir
 
 
-def gen_metadata(data_topology_filepath: [str,Path],ceph_dir,harp_bin_dir=r'X:\Dammy\harpbins'):
+def gen_metadata(data_topology_filepath: [str,Path],ceph_dir,col_name='sound_bin_stem',harp_bin_dir=r'X:\Dammy\harpbins'):
     if not isinstance(data_topology_filepath,Path):
         data_topology_filepath = Path(data_topology_filepath)
     data_topology = pd.read_csv(data_topology_filepath)
     for idx,sess in data_topology.iterrows():
-        e_dir = ceph_dir/posix_from_win(sess['ephys_dir'])
-        bin_stem = sess['beh_bin_stem']
+        e_dir = next(posix_from_win(sess['ephys_dir']).rglob('continuous')).parent
+        bin_stem = sess[col_name]
         dir_files = list(e_dir.iterdir())
         if 'metadata.json' not in dir_files or True:
-            harp_bin_dir = Path(harp_bin_dir)
-            harp_writes = pd.read_csv(harp_bin_dir/f'{bin_stem}_write_data.csv')
-            trigger_time = harp_writes[harp_writes['DO3']==True]['Times'][0]
+            if harp_bin_dir and isinstance(harp_bin_dir,Path):
+                harp_bin = harp_bin_dir/f'{bin_stem}_write_data.csv'
+            else:
+                bin_path = Path(bin_stem)
+                harp_bin = bin_path.with_stem(f'{bin_path.stem}_write_data').with_suffix('.csv')
+            # harp_bin_dir = Path(harp_bin_dir)
+            harp_writes = pd.read_csv(harp_bin)
+            trigger_time = harp_writes[harp_writes['DO3']==True]['Times'].values[0]
             metadata = {'trigger_time': trigger_time}
             with open(e_dir/'metadata.json','w') as jsonfile:
                 json.dump(metadata,jsonfile)
@@ -105,7 +112,8 @@ def load_spikes(spike_times_path:[Path|str], spike_clusters_path:[Path|str], par
     assert spike_times_path.suffix == '.npy' and spike_clusters_path.suffix == '.npy', Warning('paths should be .npy')
 
     if parent_dir:
-        spike_times_path,spike_clusters_path = [parent_dir / path or path for path in [spike_times_path,spike_clusters_path]
+        spike_times_path,spike_clusters_path = [next(parent_dir.rglob(path.name)) or path
+                                                for path in [spike_times_path,spike_clusters_path]
                                                 if not path.is_absolute()]
     spike_times = np.load(spike_times_path)
     spike_clusters = np.load(spike_clusters_path)
@@ -190,8 +198,10 @@ def gen_firing_rate_matrix(spike_matrix: pd.DataFrame, bin_dur=0.01, baseline_du
     return rate_matrix
 
 
-def load_sound_bin(bin_stem, bin_dir=Path(r'X:\Dammy\harpbins')):
-    all_writes = pd.read_csv(bin_dir/f'{bin_stem}_write_indices.csv')
+# def load_sound_bin(fpath:Pathbin_stem, bin_dir=Path(r'X:\Dammy\harpbins')):
+def load_sound_bin(binpath:Path):
+    # all_writes = pd.read_csv(bin_dir/f'{bin_stem}_write_indices.csv')
+    all_writes = pd.read_csv(binpath)
     return all_writes
 
 
@@ -589,9 +599,9 @@ class Decoder:
 
     def decode(self,dec_kwargs,**kwargs):
         if not dec_kwargs.get('cv_folds',0):
-            n_runs = kwargs.get('n_runs',1000)
+            n_runs = kwargs.get('n_runs',100)
         else:
-            n_runs = kwargs.get('n_runs',1000)
+            n_runs = kwargs.get('n_runs',100)
         # cv_folds = kwargs.get('cv_folds',None)
         # if not kwargs.get('balance',False):
         if not isinstance(self.predictors,(list|tuple)):
@@ -661,6 +671,61 @@ class Decoder:
         self.cm_plot[1].invert_yaxis()
 
 
+class SessionLicks:
+    def __init__(self, lick_times: np.ndarray, sound_writes:pd.DataFrame, fs=1e3, resample_fs=1e2, ):
+        """
+        Initialize the SpikeSorter class.
+
+        Parameters:
+            spike_times_path (Path|str): The path to the spike times file.
+            spike_clusters_path (Path|str): The path to the spike clusters file.
+            sess_start_time (float): The start time of the session.
+            parent_dir (optional): The parent directory. Defaults to None.
+            fs (float): The sampling frequency. Defaults to 30000.0.
+            resample_fs (float): The resampled sampling frequency. Defaults to 1000.0.
+
+        Returns:
+            None
+        """
+        self.fs = fs
+        self.new_fs = resample_fs
+        self.spike_times, self.clusters = lick_times,np.zeros_like(lick_times)
+        # self.spike_times = self.spike_times/fs + sess_start_time  # units seconds
+
+        self.cluster_spike_times_dict = cluster_spike_times(self.spike_times, self.clusters)
+
+        self.event_spike_matrices = dict()
+        self.event_cluster_spike_times = dict()
+        self.sound_writes = sound_writes
+
+    def get_event_spikes(self,event_times: [list|np.ndarray|pd.Series], event_name: str, window: [list| np.ndarray]):
+
+        for event_time in event_times:
+            if f'{event_name}_{event_time}' not in list(self.event_cluster_spike_times.keys()):
+                self.event_cluster_spike_times[f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,self.cluster_spike_times_dict,window,self.new_fs)
+            if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
+                self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(self.event_cluster_spike_times[f'{event_name}_{event_time}'],
+                                                                                           window,self.new_fs)
+
+    # lick_times_path = Path(r'X:\Dammy\harpbins\DO79_HitData_240417b_event_data_32.csv')
+    # licks = read_lick_times(lick_times_path)
+    #
+    # sound_events_path = Path(r'X:\Dammy\harpbins\DO79_SoundData_240417b_write_indices.csv')
+    # sound_events = pd.read_csv(sound_events_path)
+    # lick_obj = SessionLicks(licks, 0)
+    #
+    # # spikes_in_window =
+    # window = [-3, 3]
+    # lick_obj.get_event_spikes(sound_events.query('Payload == 3')['Timestamp'].values, 'lick_to_X', window)
+    # licks_to_X = pd.concat([e for e in lick_obj.event_spike_matrices.values()])
+    # fig, ax = plt.subplots()
+    # ax.imshow(licks_to_X.values, cmap='binary', extent=[window[0], window[1], licks_to_X.shape[0], 0], aspect='auto',
+    #           origin='upper')
+    # ax.axvline(0, c='k', ls='--')
+    # ax.set_ylabel('Trials')
+    # ax.set_xlabel('time since X (s)')
+    # fig.show()
+
 class Session:
     def __init__(self,sessname,ceph_dir,pkl_dir='X:\Dammy\ephys_pkls',):
         self.iti_zscore = None
@@ -690,13 +755,12 @@ class Session:
         """
         self.spike_obj = SessionSpikes(spike_times_path, spike_cluster_path, start_time, parent_dir)
 
-    def init_sound_event_dict(self,sound_write_path_stem,sound_event_labels,tone_space=5,
-                              harpbin_dir=Path(r'X:\Dammy\harpbins'), normal=None,new_normal=None):
+    def init_sound_event_dict(self, sound_write_path, sound_event_labels,  normal=None, new_normal=None):
         """
         Initialize a sound event dictionary using the given parameters.
 
         Args:
-            sound_write_path_stem: The path stem for the sound writes.
+            sound_write_path: The path stem for the sound writes.
             sound_event_labels: Labels for the sound events.
             tone_space: The space between tones.
             harpbin_dir: The directory for the harp bins.
@@ -706,19 +770,20 @@ class Session:
         Returns:
             None
         """
-        sound_writes = load_sound_bin(sound_write_path_stem,bin_dir=harpbin_dir)
+        sound_writes = load_sound_bin(sound_write_path)
         # assign sounds to trials
         sound_writes['Trial_Number'] = np.full_like(sound_writes.index, -1)
         sound_writes_diff = sound_writes['Time_diff'] = sound_writes['Timestamp'].diff()
-        long_dt = np.squeeze(np.argwhere(sound_writes_diff > 1))
+        print(sound_writes_diff[:10])
+        long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 1))
         for n, idx in enumerate(long_dt):
             sound_writes.loc[idx:, 'Trial_Number'] = n
         sound_writes['Trial_Number'] = sound_writes['Trial_Number'] + 1
-        if '240216a' in sound_write_path_stem:
+        if '240216a' in str(sound_write_path):
             sound_writes = sound_writes[sound_writes['Trial_Number']>30]
         sound_writes_diff = sound_writes['Time_diff'] = sound_writes['Timestamp'].diff()
         sound_writes['Payload_diff'] = sound_writes['Payload'].diff()
-        long_dt = np.squeeze(np.argwhere(sound_writes_diff > 1))
+        long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 1))
 
 
         # if passive:
@@ -859,10 +924,10 @@ class Session:
         prediction_ts = np.array(prediction_ts_list)
         return prediction_ts
 
-    def load_trial_data(self,tdfile_path,td_home, tddir_path=r'H:\data\Dammy'):
-        tddir_path = posix_from_win(tddir_path)
-        td_path = Path(td_home)/tddir_path/tdfile_path
-        self.td_df = pd.read_csv(td_path)
+    def load_trial_data(self,tdfile_path):
+        # tddir_path = posix_from_win(tddir_path)
+        # td_path = Path(td_home)/tddir_path/tdfile_path
+        self.td_df = pd.read_csv(tdfile_path)
         self.get_n_since_last()
         self.get_local_rate()
 

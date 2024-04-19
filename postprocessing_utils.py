@@ -13,12 +13,16 @@ from spikeinterface.qualitymetrics import compute_quality_metrics
 from copy import deepcopy as copy
 import os
 
-def get_sorting_dirs(ephys_dir:Path, sess_date, sorting_dir_name, sorter_dir_name,output_dir_name='si_output'):
-    sess_dirs = sorted(list(ephys_dir.glob(f'*{sess_date}*')))
+
+def get_sorting_dirs(ephys_dir:Path, sess_name_date, sorting_dir_name, sorter_dir_name, output_name='si_output'):
+    sess_dirs = sorted(list(ephys_dir.glob(f'*{sess_name_date}*')))
     print(sess_dirs)
-    sorting_dirs = [sess/sorting_dir_name/sorter_dir_name/output_dir_name for sess in sess_dirs if
-                    (sess/sorting_dir_name/sorter_dir_name/output_dir_name).is_dir()]
-    assert all([sorting_dir.is_dir() for sorting_dir in sorting_dirs]), 'Not all paths are directories'
+    sorting_dirs = [sess / sorting_dir_name / sorter_dir_name / output_name if (sess / sorting_dir_name / sorter_dir_name / output_name).is_dir()
+                    else (sess / sorting_dir_name / sorter_dir_name / output_name, (sess / sorting_dir_name / sorter_dir_name / output_name).mkdir(parents=True))[0] for sess in sess_dirs]
+    [Warning(f'sort dir empty for {sort_dir}') for sort_dir in sorting_dirs if not list(sort_dir.glob('*'))]
+    assert all([sorting_dir.is_dir() for sorting_dir in sorting_dirs]) and bool(sorting_dirs), 'Not all paths are directories'
+    # [next(e.rglob('spike_times.npy')).parent for e in sorting_dirs]
+    # return [next(e.rglob('spike_times.npy')).parent for e in sorting_dirs]
     return sorting_dirs
 
 
@@ -127,7 +131,7 @@ def postprocess(recording, sorting, sort_dir:Path):
                   format='svg', n_jobs=os.cpu_count() - 1)
 
     plots = get_shank_spectrum_by_depth(recording)
-    [plot[0].savefig(sort_dir.parent / f'shank_spectrum_{i}.png') for i,plot in enumerate(plots)]
+    [plot[0].savefig(sort_dir.parent / f'shank_spectrum_{i}.svg') for i,plot in enumerate(plots)]
 
 
 def get_shank_spectrum_by_depth(recording):

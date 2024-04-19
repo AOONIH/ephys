@@ -2,6 +2,7 @@ import spikeinterface.full as si
 from spikeinterface.preprocessing.motion import motion_options_preset
 from spikeinterface.sortingcomponents.peak_detection import detect_peaks
 from spikeinterface.sortingcomponents.peak_localization import localize_peaks
+from ephys_analysis_funcs import posix_from_win
 import probeinterface as pi
 import warnings
 import yaml
@@ -20,8 +21,9 @@ from copy import deepcopy as copy
 import pandas as pd
 import os
 from matplotlib import pyplot as plt
-warnings.simplefilter("ignore")
 import functools
+import subprocess
+warnings.simplefilter("ignore")
 
 
 def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_flag=True,sorter_dir_suffix='',
@@ -127,7 +129,7 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         aggregate_sorting = si.run_sorter(sorter_name=sorter, recording=all_recordings,
                                           output_folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
                                           singularity_image=container_flag, delete_container_files=False,
-                                          remove_existing_folder=False,verbose=True, **sorting_kwargs
+                                          remove_existing_folder=True,verbose=True, **sorting_kwargs
                                           )
         # aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=all_recordings,
         #                                               grouping_property='group',
@@ -136,11 +138,11 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         #                                               remove_existing_folder=True,verbose=True, **sorting_kwargs
         #                                               )
     aggregate_sorting.save(folder=rec_dir / f'{sorter}{sorter_dir_suffix}'/'si_output', overwrite=True,verbose=True)
-    # si.KiloSortSortingExtractor.to_dict()
-    # waveforms = si.extract_waveforms(all_recordings,aggregate_sorting,rec_dir / f'{sorter}{sorter_dir_suffix}'/'waveforms',
-    #                                  sparse=True,**job_kwargs,overwrite=True)
-    # si.export_to_phy(waveforms,output_folder=rec_dir / f'{sorter}{sorter_dir_suffix}'/'phy',
-    #                  compute_amplitudes=False, compute_pc_features=False, copy_binary=False,remove_if_exists=True)
+
+    if len(preprocessed_recs) > 1:
+        # get date_str
+        sess_date = datetime.strptime(dirs2sort[0].parts[-1].split('_')[1][:10], '%Y-%m-%d').strftime('%y%m%d')
+        subprocess.run(f'python split_concat.py config.yaml {sess_date} --ow_flag 1'.split(' '),shell=True)
 
     return aggregate_sorting
 
@@ -268,27 +270,36 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file')
     parser.add_argument('--datadir',default=None)
+    parser.add_argument('--extra_datadirs',default='')
     args = parser.parse_args()
     with open(args.config_file,'r') as file:
         config = yaml.safe_load(file)
     sys_os = platform.system().lower()
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
-    folder, sorter_name = config['recording_dir'],config['sorter']
-    extra_folders = config.get('extra_dirs',[])
-    extra_folders = [ceph_dir/Path(*e) for e in extra_folders if e]
+
     rec_dir_suffix = config.get('rec_dir_suffix','')
+    sorter_name = config['sorter']
+    if args.datadir:
+        folder = args.datadir
+        if args.extra_datadirs:
+            extra_folders = [ceph_dir / posix_from_win(e) for e in args.extra_datadirs.split(';')]
+        else:
+            extra_folders = []
+    else:
+        folder = config['recording_dir']
+        extra_folders = config.get('extra_dirs', [])
     if extra_folders:
-        extra_folders = [ceph_dir/Path(recdir) for recdir in extra_folders]
+        # extra_folders = [ceph_dir/posix_from_win(recdir) for recdir in extra_folders]
         if not rec_dir_suffix:
             rec_dir_suffix = '_concat'
 
-    if args.datadir:
-        folder[-1] = args.datadir
     logger.info(f'loaded config for {folder[-1]}')
     ow_flag = config.get('ow_flag',False)
     container_flag = config.get('container_flag', False)
     block_idx = config.get('block_idx', 0)
-    sorter_output = sort_recording(ceph_dir/Path(*folder),sorter_name,probe_name=config['probe_name'],
+
+    recording_dir = ceph_dir/posix_from_win(folder)
+    sorter_output = sort_recording(recording_dir,sorter_name,probe_name=config['probe_name'],
                                    ow_flag=ow_flag,container_flag=container_flag,
                                    sorter_dir_suffix=config.get('sorter_dir_suffix', ''),index=block_idx,
                                    extra_folders=extra_folders,recording_dir_suffix=rec_dir_suffix)

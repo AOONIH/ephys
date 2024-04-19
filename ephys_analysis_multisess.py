@@ -12,6 +12,7 @@ import ruptures as rpt
 import time
 from postprocessing_utils import get_sorting_dirs
 from datetime import datetime
+import pandas as pd
 
 
 if __name__ == "__main__":
@@ -25,8 +26,12 @@ if __name__ == "__main__":
     sys_os = platform.system().lower()
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
 
-    gen_metadata(ceph_dir/posix_from_win(r'X:\Dammy\ephys\session_topology.csv'),ceph_dir,ceph_dir/'Dammy'/'harpbins')
-    session_topology = pd.read_csv(ceph_dir/posix_from_win(r'X:\Dammy\ephys\session_topology.csv'))
+    # try: gen_metadata(ceph_dir/posix_from_win(r'X:\Dammy\ephys\session_topology.csv'),ceph_dir,ceph_dir/'Dammy'/'harpbins')
+    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
+    try: gen_metadata(sess_topology_path,ceph_dir,
+                      col_name='beh_bin',harp_bin_dir='')
+    except OSError: pass
+    session_topology = pd.read_csv(sess_topology_path)
     # win_rec_dir = r'X:\Dammy\ephys\DO79_2024-01-17_15-20-19_001\Record Node 101\experiment1\recording1'
     name,date = args.sess_date.split('_')
     date = int(date)
@@ -35,38 +40,54 @@ if __name__ == "__main__":
     dir1_name, dir2_name = 'sorting_no_si_drift', 'kilosort2_5_ks_drift'
     ephys_dir = ceph_dir / 'Dammy' / 'ephys'
     date_str = datetime.strptime(str(date), '%y%m%d').strftime('%Y-%m-%d')
-    sort_dirs = get_sorting_dirs(ephys_dir, date_str,dir1_name, dir2_name,args.sorter_dirname)
+    sort_dirs = get_sorting_dirs(ephys_dir, f'{name}_{date_str}',dir1_name, dir2_name,'from_concat')
 
-    ephys_figdir = ceph_dir/'Dammy'/'figures'/'test_concat_sorting_2'
+    ephys_figdir = ceph_dir/'Dammy'/'figures'/'new_animals'
     if not ephys_figdir.is_dir():
         ephys_figdir.mkdir()
 
     sessions = {}
     psth_window = [-2, 3]
-    for (_,sess_info),spike_dir in zip(all_sess_info.iterrows(), sort_dirs):
-        if spike_dir == sort_dirs[1]:
-            continue
-        win_rec_dir = sess_info['ephys_dir']
-        print(f'analysing {win_rec_dir}')
+    main_sess = all_sess_info.query('sess_order=="main"')
+    main_sess_td_name = Path(main_sess['sound_bin'].iloc[0].replace('_SoundData', '_TrialData')).with_suffix('.csv').name
+    # get main sess pattern
+    home_dir = Path(config[f'home_dir_{sys_os}'])
+    td_path_pattern = 'data/Dammy/<name>/TrialData'
+    td_path = td_path_pattern.replace('<name>', main_sess_td_name.split('_')[0])
+    abs_td_path_dir = home_dir / td_path
+    abs_td_path = next(abs_td_path_dir.glob(f'{name}_TrialData_{date}*.csv'))
+    print(f'{abs_td_path = }')
+    main_sess_td = pd.read_csv(abs_td_path)
+    try:main_pattern = main_sess_td.query('Session_Block>=0 & Tone_Position==0')['PatternID'].mode()[0]
+    except IndexError: main_pattern = None
 
-        recording_dir = ceph_dir/posix_from_win(win_rec_dir)
+    for (_,sess_info),spike_dir in zip(all_sess_info.iterrows(), sort_dirs):
+        # if spike_dir == sort_dirs[0]:
+        #     continue
+        # win_rec_dir = Path(sess_info['ephys_dir'])
+
+        recording_dir = next(Path(sess_info['ephys_dir']).rglob('continuous')).parent
+        print(f'analysing {recording_dir.name}')
+
         spike_cluster_path = r'spike_clusters.npy'
         spike_times_path = r'spike_times.npy'
 
         with open(recording_dir / 'metadata.json', 'r') as jsonfile:
             recording_meta = json.load(jsonfile)
         start_time = recording_meta['trigger_time']
-        sessname = sess_info['sound_bin_stem']
+        sessname = Path(sess_info['sound_bin']).stem
         sessname = sessname.replace('_SoundData','')
 
         sessions[sessname] = Session(sessname, ceph_dir)
-        home_dir = config[f'home_dir_{sys_os}']
-        sess_td_path = sess_info['trialdata_path']
 
-        if 'passive' not in sess_td_path:
-            sessions[sessname].load_trial_data(f'{sess_td_path}.csv',home_dir,
-                                               rf'H:\data\Dammy\{sessname.split("_")[0]}\TrialData')
-            normal = sessions[sessname].td_df[sessions[sessname].td_df['Tone_Position'] == 0]['PatternID'].iloc[0]
+        # sess_td_path = next(home_dir.rglob(f'*{sessname}_TrialData.csv'))
+        # sess_td_path = sess_info['trialdata_path']
+
+        sound_bin_path = Path(sess_info['sound_bin'])
+        if sess_info['sess_order'] == 'main':
+            sessions[sessname].load_trial_data(abs_td_path)
+            # normal = sessions[sessname].td_df[sessions[sessname].td_df['Tone_Position'] == 0]['PatternID'].iloc[0]
+            normal = main_pattern
             normal = [int(pip) for pip in normal.split(';')]
             if -1 in sessions[sessname].td_df['Pattern_Type'].unique():
                 new_normal = sessions[sessname].td_df[sessions[sessname].td_df['Pattern_Type'] == -1]['PatternID'].iloc[0]
@@ -75,7 +96,7 @@ if __name__ == "__main__":
                 new_normal = None
 
         else:
-            normal = [int(pip) for pip in sess_td_path.split('_')[-1].split(';')]
+            normal = [int(pip) for pip in main_pattern.split(';')]
             new_normal = None
         if not sessions[sessname].sound_event_dict:
             sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir)
@@ -83,16 +104,16 @@ if __name__ == "__main__":
             '_'.join([_parts[0],'SoundData',_parts[1]])
             labels = ['A', 'B', 'C', 'D', 'X', 'base','newA']
 
-            sessions[sessname].init_sound_event_dict('_'.join([_parts[0],'SoundData',_parts[1]]),labels,
-                                                     harpbin_dir=ceph_dir/'Dammy'/'harpbins',normal=normal,
-                                                     new_normal=new_normal)
+            sessions[sessname].init_sound_event_dict(sound_bin_path.with_stem(f'{sound_bin_path.stem}_write_indices').with_suffix('.csv'),
+                                                     labels, normal=normal,new_normal=new_normal)
+
             sessions[sessname].get_sound_psth(psth_window=psth_window,zscore_flag=True,baseline_dur=0,redo_psth=True,
                                               use_iti_zscore=True)
             # sessions[sessname].reorder_psth(labels[0],['B', 'C', 'D'])
             sessions[sessname].get_sound_psth(psth_window=psth_window,use_iti_zscore=True, redo_psth_plot=True,)
 
             [sessions[sessname].sound_event_dict['A'].psth_plot[1].axvline(t, c='white', ls='--') for t in
-             np.arange(0, 1, 0.25) if 'passive' not in sess_td_path]
+             np.arange(0, 1, 0.25) if sess_info['sess_order'] == 'main']
 
             psth_ts_plot = plt.subplots()
             psth_ts_plot[1].plot(sessions[sessname].sound_event_dict['A'].psth[1].columns.to_series().dt.total_seconds(),
@@ -132,7 +153,7 @@ if __name__ == "__main__":
                 psth_XA_plot[0].tight_layout(pad=0)
                 psth_XA_plot[0].show()
 
-            if 'passive' in sess_td_path:
+            if sess_info['sess_order'] != 'main':
                 psth_ABCD_plot = plt.subplots(ncols=4,figsize=(9,3.5),sharey='all')
                 for ei, e in enumerate('ABCD'):
                     psth_mat = get_predictor_from_psth(sessions[sessname], e, psth_window,[-0.5,1],mean=np.mean,mean_axis=0)
@@ -268,8 +289,7 @@ if __name__ == "__main__":
                                                                            f'all_vs_all_accuracy_{sessname}.svg')
 
         home_dir = config[f'home_dir_{sys_os}']
-        sess_td_path = sess_info['trialdata_path']
-        if 'passive' not in sess_td_path:
+        if sess_info['sess_order'] == 'main':
             if 3 in sessions[sessname].td_df['Stage'].values:
                 # sessions[sessname].load_trial_data(f'{sess_td_path}.csv',home_dir,
                 #                                    rf'H:\data\Dammy\{sessname.split("_")[0]}\TrialData')
@@ -419,7 +439,7 @@ if __name__ == "__main__":
                 pearson_plot[0].show()
                 pearson_plot[0].savefig(ephys_figdir / f'pearson_tofirst_A_{sessname}.svg', )
 
-        if 'passive' not in sess_td_path:
+        if sess_info['sess_order'] == 'main':
             if 4 in sessions[sessname].td_df['Stage'].values:
                 new_window = [-1, 2]
                 pip_predictor = get_predictor_from_psth(sessions[sessname], 'A', psth_window, new_window, mean=None)
@@ -493,7 +513,8 @@ if __name__ == "__main__":
             # prediction_ts_plot[1].plot(x_ser,lbl_pred.mean(axis=0).mean(axis=0), label=lbl)
             # prediction_ts_plot[1][li].axis('off')
             # for dec_i, (dec_preds, dec_name) in enumerate(zip(predictions_ts_array,list('ABCD'))):
-        [prediction_ts_plot[1].axvspan(t,t+0.15,fc='k',alpha=0.1) for t in np.arange(0,1,.25) if 'passive' in sess_td_path]
+        [prediction_ts_plot[1].axvspan(t,t+0.15,fc='k',alpha=0.1)
+         for t in np.arange(0,1,.25) if sess_info['sess_order'] != 'main']
         prediction_ts_plot[1].set_ylabel('prediction rate')
         # prediction_ts_plot[1].set_ylim(0,.7)
         prediction_ts_plot[1].set_xlim(-0.5,1.5)
@@ -534,20 +555,21 @@ if __name__ == "__main__":
     sess_decoder2use = sessnames[1]
     window = [-1,2]
     for si, sessname in enumerate(sessnames):
-        if sessname == sess_decoder2use:
-            continue
-        model2use = np.array(sessions[sess_decoder2use].decoders['all_vs_all'].models).flatten()[:100]
-        pip_predictor = get_predictor_from_psth(sessions[sessname], 'A', psth_window, window, mean=None)
-        cross_sess_preds = np.array([predict_1d(model2use,ts)
-                                     for ts in tqdm(pip_predictor,total=len(pip_predictor),desc=f'predicting {sessname}')])
-        x_ser = np.linspace(window[0],window[1],cross_sess_preds.shape[2])
-        cross_sess_preds_tsplot = plt.subplots()
-        for li, lbl in enumerate('ABCD'):
-            lbl_pred = cross_sess_preds==li
-            cross_sess_preds_tsplot[1].plot(x_ser,savgol_filter(lbl_pred.mean(axis=0).mean(axis=0),51,2), label=lbl)
-        cross_sess_preds_tsplot[1].legend()
-        cross_sess_preds_tsplot[1].axvline(0,c='k',ls='--')
-        [cross_sess_preds_tsplot[1].axvspan(t, t + 0.15, fc='k', alpha=0.1) for t in np.arange(0, 1, .25) if
-         not 'passive' in all_sess_info.iloc[si]['trialdata_path']]
+        for pip in 'ABCD':
+            if sessname == sess_decoder2use:
+                continue
+            model2use = np.array(sessions[sess_decoder2use].decoders['all_vs_all'].models).flatten()
+            pip_predictor = get_predictor_from_psth(sessions[sessname], pip, psth_window, window, mean=None)
+            cross_sess_preds = np.array([predict_1d(model2use,ts)
+                                         for ts in tqdm(pip_predictor,total=len(pip_predictor),desc=f'predicting {sessname}')])
+            x_ser = np.linspace(window[0],window[1],cross_sess_preds.shape[2])
+            cross_sess_preds_tsplot = plt.subplots()
+            for li, lbl in enumerate('ABCD'):
+                lbl_pred = cross_sess_preds==li
+                cross_sess_preds_tsplot[1].plot(x_ser,savgol_filter(lbl_pred.mean(axis=0).mean(axis=0),51,2), label=lbl)
+            cross_sess_preds_tsplot[1].legend()
+            cross_sess_preds_tsplot[1].axvline(0,c='k',ls='--')
+            [cross_sess_preds_tsplot[1].axvspan(t, t + 0.15, fc='k', alpha=0.1) for t in np.arange(0, 1, .25)
+             if all_sess_info.iloc[si]['sess_order'] == 'main']
 
-        cross_sess_preds_tsplot[0].show()
+            cross_sess_preds_tsplot[0].savefig(ephys_figdir/f'cross_sess_preds_{sess_decoder2use}_on_{sessname}_for_{pip}.svg')
