@@ -129,9 +129,11 @@ def postprocess(recording, sorting, sort_dir:Path):
     export_report(waveform_extractor=we, output_folder=sort_dir.parent / 'si_report_good_units',
                   remove_if_exists=True,
                   format='svg', n_jobs=os.cpu_count() - 1)
-
-    plots = get_shank_spectrum_by_depth(recording)
-    [plot[0].savefig(sort_dir.parent / f'shank_spectrum_{i}.svg') for i,plot in enumerate(plots)]
+    try:
+        plots = get_shank_spectrum_by_depth(recording)
+        [plot[0].savefig(sort_dir.parent / f'shank_spectrum_{i}.svg') for i,plot in enumerate(plots)]
+    except:
+        pass
 
 
 def get_shank_spectrum_by_depth(recording):

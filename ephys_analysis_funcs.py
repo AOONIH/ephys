@@ -205,6 +205,37 @@ def load_sound_bin(binpath:Path):
     return all_writes
 
 
+def format_sound_writes(sound_writes_df:pd.DataFrame, normal:[int], ):
+    # assign sounds to trials
+    sound_writes_df = sound_writes_df.drop_duplicates(subset='Timestamp', keep='first').copy()
+    sound_writes_df['Trial_Number'] = np.full_like(sound_writes_df.index, -1)
+    sound_writes_diff = sound_writes_df['Time_diff'] = sound_writes_df['Timestamp'].diff()
+    # print(sound_writes_diff[:10])
+    long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 1))
+    for n, idx in enumerate(long_dt):
+        sound_writes_df.loc[idx:, 'Trial_Number'] = n
+    sound_writes_df['Trial_Number'] = sound_writes_df['Trial_Number'] + 1
+    sound_writes_df['Time_diff'] = sound_writes_df['Timestamp'].diff()
+    sound_writes_df['Payload_diff'] = sound_writes_df['Payload'].diff()
+    base_pip_idx = normal[0] - (-2 if (normal[0] - normal[1] > 0) else 2)  # base to pip gap
+    non_base_pips = sound_writes_df.query('Payload > 8 & Payload != @base_pip_idx')['Payload'].unique()
+    sound_writes_df['pattern_pips'] = np.any((sound_writes_df['Payload_diff'] == (-2 if (normal[0] - normal[1] > 0) else 2),
+                                              sound_writes_df['Payload'].isin(non_base_pips)), axis=0)
+    sound_writes_df['pattern_start'] = sound_writes_df['pattern_pips'] * sound_writes_df['pattern_pips'].diff() > 0
+    sound_writes_df['pip_counter'] = np.zeros_like(sound_writes_df['pattern_start']).astype(int)
+    for i in sound_writes_df.query('pattern_start == True').index:
+        sound_writes_df.loc[i:i + 3, 'pip_counter'] = np.cumsum(sound_writes_df['pattern_pips'].loc[i:i + 3]) \
+                                                      * sound_writes_df['pattern_pips'].loc[i:i + 3]
+
+    return sound_writes_df
+
+
+def read_lick_times(beh_event_path:Path):
+    beh_events = pd.read_csv(beh_event_path)
+    lick_times = beh_events.query('Payload == 0')['Timestamp'].values
+    return lick_times
+
+
 def simple_beeswarm2(y, nbins=None, width=1.):
     """
     Returns x coordinates for the points in ``y``, so that plotting ``x`` and
@@ -673,24 +704,12 @@ class Decoder:
 
 class SessionLicks:
     def __init__(self, lick_times: np.ndarray, sound_writes:pd.DataFrame, fs=1e3, resample_fs=1e2, ):
-        """
-        Initialize the SpikeSorter class.
 
-        Parameters:
-            spike_times_path (Path|str): The path to the spike times file.
-            spike_clusters_path (Path|str): The path to the spike clusters file.
-            sess_start_time (float): The start time of the session.
-            parent_dir (optional): The parent directory. Defaults to None.
-            fs (float): The sampling frequency. Defaults to 30000.0.
-            resample_fs (float): The resampled sampling frequency. Defaults to 1000.0.
-
-        Returns:
-            None
-        """
+        self.event_lick_plots = {}
+        self.event_licks = {}
         self.fs = fs
         self.new_fs = resample_fs
         self.spike_times, self.clusters = lick_times,np.zeros_like(lick_times)
-        # self.spike_times = self.spike_times/fs + sess_start_time  # units seconds
 
         self.cluster_spike_times_dict = cluster_spike_times(self.spike_times, self.clusters)
 
@@ -698,36 +717,40 @@ class SessionLicks:
         self.event_cluster_spike_times = dict()
         self.sound_writes = sound_writes
 
-    def get_event_spikes(self,event_times: [list|np.ndarray|pd.Series], event_name: str, window: [list| np.ndarray]):
-
+    def get_event_spikes(self,event_idx: int, event_name: str, window: [list| np.ndarray],sessname: str):
+        event_times = self.sound_writes.query(f'Payload == {event_idx}')['Timestamp'].values
+        event_trialnum = self.sound_writes.query(f'Payload == {event_idx}')['Trial_Number'].values
+        self.event_spike_matrices[event_name] = dict()
+        self.event_cluster_spike_times[event_name] = dict()
         for event_time in event_times:
             if f'{event_name}_{event_time}' not in list(self.event_cluster_spike_times.keys()):
-                self.event_cluster_spike_times[f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,self.cluster_spike_times_dict,window,self.new_fs)
+                self.event_cluster_spike_times[event_name][f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,self.cluster_spike_times_dict,window,self.new_fs)
             if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
-                self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(self.event_cluster_spike_times[f'{event_name}_{event_time}'],
+                self.event_spike_matrices[event_name][f'{event_name}_{event_time}'] = gen_spike_matrix(self.event_cluster_spike_times[event_name][f'{event_name}_{event_time}'],
                                                                                            window,self.new_fs)
+        # self.event_licks[f'{event_name}_licks'] = pd.concat([self.event_spike_matrices[e_key] for e_key in self.event_spike_matrices
+        #                                                      if event_name in e_key])
+        self.event_licks[f'{event_name}_licks'] = pd.concat(self.event_spike_matrices[event_name])
+        # multi index for licks
+        self.event_licks[f'{event_name}_licks'].index = pd.MultiIndex.from_arrays([event_times,event_trialnum,
+                                                                                   [sessname]*len(event_trialnum)],
+                                                                                  names=['time','trial','sess'])
 
-    # lick_times_path = Path(r'X:\Dammy\harpbins\DO79_HitData_240417b_event_data_32.csv')
-    # licks = read_lick_times(lick_times_path)
-    #
-    # sound_events_path = Path(r'X:\Dammy\harpbins\DO79_SoundData_240417b_write_indices.csv')
-    # sound_events = pd.read_csv(sound_events_path)
-    # lick_obj = SessionLicks(licks, 0)
-    #
-    # # spikes_in_window =
-    # window = [-3, 3]
-    # lick_obj.get_event_spikes(sound_events.query('Payload == 3')['Timestamp'].values, 'lick_to_X', window)
-    # licks_to_X = pd.concat([e for e in lick_obj.event_spike_matrices.values()])
-    # fig, ax = plt.subplots()
-    # ax.imshow(licks_to_X.values, cmap='binary', extent=[window[0], window[1], licks_to_X.shape[0], 0], aspect='auto',
-    #           origin='upper')
-    # ax.axvline(0, c='k', ls='--')
-    # ax.set_ylabel('Trials')
-    # ax.set_xlabel('time since X (s)')
-    # fig.show()
+    def plot_licks(self, event_name, window=(-3, 3)):
+        licks_to_event = self.event_licks[f'{event_name}_licks']
+        lick_plot = plot_2d_array_with_subplots(licks_to_event,cmap='binary',extent=[window[0], window[1],
+                                                                                     licks_to_event.shape[0], 0],
+                                                plot_cbar=False)
+        lick_plot[1].axvline(0, c='k', ls='--')
+        lick_plot[1].set_ylabel('Trials')
+        lick_plot[1].set_xlabel(f'time since {event_name} (s)')
+
+        self.event_lick_plots[f'licks_to_{event_name}'] = lick_plot
+
 
 class Session:
     def __init__(self,sessname,ceph_dir,pkl_dir='X:\Dammy\ephys_pkls',):
+        self.lick_obj = None
         self.iti_zscore = None
         self.td_df = pd.DataFrame()
         self.sessname = sessname
@@ -934,12 +957,25 @@ class Session:
     def get_n_since_last(self):
         self.td_df['n_since_last'] = np.arange(self.td_df.shape[0])
         since_last = self.td_df[self.td_df['Tone_Position'] == 0].index
-        for t,tt in zip(since_last,np.pad(since_last,[1,0])):
-            self.td_df.loc[tt+1:t,'n_since_last'] = self.td_df.loc[tt+1:t,'n_since_last']-tt
-        self.td_df.loc[t+1:, 'n_since_last'] = self.td_df.loc[t+1:, 'n_since_last'] - t
+        if not since_last.empty:
+            for t,tt in zip(since_last,np.pad(since_last,[1,0])):
+                self.td_df.loc[tt+1:t,'n_since_last'] = self.td_df.loc[tt+1:t,'n_since_last']-tt
+            self.td_df.loc[t+1:, 'n_since_last'] = self.td_df.loc[t+1:, 'n_since_last'] - t
 
     def get_local_rate(self,window=5):
         self.td_df['local_rate'] = self.td_df['Tone_Position'].rolling(window=window).mean()
+
+    def init_lick_obj(self,lick_times_path, sound_events_path,normal):
+        licks = read_lick_times(lick_times_path)
+        sound_events = pd.read_csv(sound_events_path)
+        sound_events = format_sound_writes(sound_events,normal)
+        self.lick_obj = SessionLicks(licks,sound_events)
+
+    def get_licks_to_event(self, event_idx, event_name, window=(-3, 3),plot_kwargs=None):
+        self.lick_obj.get_event_spikes(event_idx, event_name, window,self.sessname)
+        self.lick_obj.plot_licks(event_name, window)
+
+
 
 
 def get_predictor_from_psth(sess_obj:Session,event_key,psth_window, new_window, mean=np.mean,mean_axis=2) -> np.ndarray:
@@ -988,3 +1024,4 @@ def find_ramp_start(signal:np.ndarray,):
     t_peak = np.argmax(signal)
     d2_signal = np.diff(savgol_filter(np.diff(signal[:t_peak]),50,2))
     return d2_signal[d2_signal>d2_signal.mean()+2*d2_signal.std()]
+

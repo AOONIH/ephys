@@ -84,6 +84,7 @@ if __name__ == "__main__":
         # sess_td_path = sess_info['trialdata_path']
 
         sound_bin_path = Path(sess_info['sound_bin'])
+        beh_bin_path = Path(sess_info['beh_bin'])
         if sess_info['sess_order'] == 'main':
             sessions[sessname].load_trial_data(abs_td_path)
             # normal = sessions[sessname].td_df[sessions[sessname].td_df['Tone_Position'] == 0]['PatternID'].iloc[0]
@@ -439,6 +440,16 @@ if __name__ == "__main__":
                 pearson_plot[0].show()
                 pearson_plot[0].savefig(ephys_figdir / f'pearson_tofirst_A_{sessname}.svg', )
 
+        # lick analysis
+        if sess_info['sess_order'] == 'main':
+            sound_write_path = sound_bin_path.with_stem(f'{sound_bin_path.stem}_write_indices').with_suffix('.csv')
+            beh_events_path = beh_bin_path.with_stem(f'{beh_bin_path.stem}_event_data_32').with_suffix('.csv')
+            sessions[sessname].init_lick_obj(beh_events_path,sound_write_path)
+            sessions[sessname].get_licks_to_event(3,'X')
+            sessions[sessname].get_licks_to_event(normal[0],'A')
+            [sessions[sessname].lick_obj.event_lick_plots[f'licks_to_{event}'][0].savefig(ephys_figdir/f'licks_to_{event}_{sessname}.svg',)
+             for event in ['X','A']]
+
         if sess_info['sess_order'] == 'main':
             if 4 in sessions[sessname].td_df['Stage'].values:
                 new_window = [-1, 2]
@@ -573,3 +584,4 @@ if __name__ == "__main__":
              if all_sess_info.iloc[si]['sess_order'] == 'main']
 
             cross_sess_preds_tsplot[0].savefig(ephys_figdir/f'cross_sess_preds_{sess_decoder2use}_on_{sessname}_for_{pip}.svg')
+
