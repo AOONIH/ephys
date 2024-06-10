@@ -30,15 +30,15 @@ if __name__ == '__main__':
         config = yaml.safe_load(file)
     sys_os = platform.system().lower()
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
-    date_str = datetime.strptime(args.sess_date,'%y%m%d').strftime('%Y-%m-%d')
+    date_str = datetime.strptime(args.sess_date.split('_')[-1],'%y%m%d').strftime('%Y-%m-%d')
 
     ephys_dir = ceph_dir / 'Dammy' / 'ephys'
     assert ephys_dir.is_dir()
-
-    sorting_dirs = get_sorting_dirs(ephys_dir, date_str, 'sorting_no_si_drift', 'kilosort2_5_ks_drift')
+    sess = f'{args.sess_date.split("_")[0]}_{date_str}'
+    sorting_dirs = get_sorting_dirs(ephys_dir, sess, 'sorting_no_si_drift', 'kilosort2_5_ks_drift')
     sorter_outputs, recordings = get_sorting_objs(sorting_dirs)
 
     print(f'generating waveform extractors')
 
-    [postprocess(recording, sorting, sort_dir)
-     for sorting, recording, sort_dir in zip(sorter_outputs, recordings, sorting_dirs)]
+    # [postprocess(recording, sorting, sort_dir)
+    #  for sorting, recording, sort_dir in zip(sorter_outputs, recordings, sorting_dirs)]

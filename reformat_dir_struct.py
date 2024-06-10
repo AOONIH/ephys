@@ -96,6 +96,8 @@ def match2ephys(sessdirs:list[Path],to_matchdirsss:list[list[Path]],datatype_lbl
             while not mapping:
                 try:
                     mapping = input('Provide mapping')
+                    if mapping == 'SKIP':
+                        return None
                     mapping = [[int(ee) for ee in e.split(',')] for e in mapping.split(';')]
                 except:
                     print('invalid mapping, try again')
@@ -241,3 +243,6 @@ if __name__ == '__main__':
     for idx, sess in tqdm(all_sess_topology.iterrows(),total=len(all_sess_topology),desc='copying sessions'):
         # copy_data_w_topology(sess,projectdir,**d_lbls)
         pass
+
+
+    # bad sess: DO79_240517 DO81_240516

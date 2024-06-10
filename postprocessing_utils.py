@@ -27,16 +27,17 @@ def get_sorting_dirs(ephys_dir:Path, sess_name_date, sorting_dir_name, sorter_di
 
 
 def get_sorting_objs(sorting_dirs):
-    sorter_outputs = [si.load_extractor(folder) for folder in sorting_dirs]
+    sorter_outputs = [si.load_extractor(next(folder.glob('si_output')) if folder.stem != 'si_output' else folder)
+                      for folder in sorting_dirs]
     recording_dirs = [folder.parent.parent / 'preprocessed' for folder in sorting_dirs]
     recordings = [si.load_extractor(recording_dir) for recording_dir in recording_dirs]
     [recording.annotate(is_filtered=True) for recording in recordings]
     return sorter_outputs, recordings
 
 
-def get_waveforms(recording, sorting, we_dir:Path):
+def get_waveforms(recording, sorting, we_dir:Path, **kwargs):
     if not we_dir.is_dir():
-        waveforms = si.extract_waveforms(recording, sorting, we_dir)
+        waveforms = si.extract_waveforms(recording, sorting, we_dir, **kwargs)
     else:
         waveforms = si.load_waveforms(we_dir)
     return waveforms
@@ -94,7 +95,7 @@ def get_probe_power(probes_df,rec_segment,fs,f_band=(0, 200)):
 def postprocess(recording, sorting, sort_dir:Path):
     print(f'Postprocessing {sort_dir.parent}')
     we_dir = sort_dir.parent / 'waveforms'
-    we = get_waveforms(recording, sorting, we_dir)
+    we = get_waveforms(recording, sorting, we_dir, verbose=False)
     _ = compute_spike_amplitudes(waveform_extractor=we)
     _ = compute_correlograms(we)
     _ = compute_unit_locations(waveform_extractor=we)
@@ -108,7 +109,8 @@ def postprocess(recording, sorting, sort_dir:Path):
     if merges:
         clean_sorting = MergeUnitsSorting(parent_sorting=sorting, units_to_merge=merges)
 
-        we = get_waveforms(recording=recording, sorting=clean_sorting, we_dir=sort_dir.parent / 'waveforms_auto_merge')
+        we = get_waveforms(recording=recording, sorting=clean_sorting, we_dir=sort_dir.parent / 'waveforms_auto_merge',
+                           verbose=False)
         export_report(waveform_extractor=we, output_folder=sort_dir.parent / 'si_report_auto_merge',
                       remove_if_exists=True,
                       format='svg', n_jobs=os.cpu_count() - 1)

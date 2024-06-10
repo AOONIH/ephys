@@ -72,7 +72,7 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
             ids = np.hstack([rec._main_ids for rec in preprocessed_rec_by_group])
             preprocessed_rec = si.aggregate_channels(preprocessed_rec_by_group,ids)
             logger.debug('read and processed openephys folder')
-            preprocessed_rec.save(folder=rec_dir/'preprocessed', **job_kwargs, overwrite=True)
+            preprocessed_rec.save(folder=rec_dir/'preprocessed', **job_kwargs, overwrite=True,verbose=False)
 
         preprocessed_recs.append(preprocessed_rec)
         # plot_rec_overview(preprocessed_rec,rec_dir)
@@ -96,8 +96,8 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
                         for ri,recording in enumerate(preprocessed_recs)]
         preprocessed_recs = [recording.channel_slice(common_channels) for recording in preprocessed_recs]
         all_recordings = si.concatenate_recordings(preprocessed_recs)
-        if not list(pre_rec_dir.glob('*.raw')):
-            all_recordings.save(folder=pre_rec_dir, **job_kwargs, overwrite=True)
+        if not list(pre_rec_dir.glob('si_folder.json')):
+            all_recordings.save(folder=pre_rec_dir, **job_kwargs, overwrite=True, verbose=False)
         # all_recordings.save(folder=rec_dir/, **job_kwargs, overwrite=True)
         all_recordings = si.load_extractor(pre_rec_dir)
         pd.DataFrame(segment_info,columns=['n_frames','duration']).to_csv(rec_dir/'preprocessed'/'segment_info.csv',
@@ -114,6 +114,9 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
     #                                               singularity_image=container_flag,
     #                                               remove_existing_folder=True,verbose=True)
     sorting_kwargs = dict(do_correction=True,n_jobs=os.cpu_count()-1, minFR=0.1,delete_tmp_files=False)
+    if (rec_dir / f"{sorter}{sorter_dir_suffix}").is_dir() and not ow_flag:
+        logger.debug(f'{rec_dir / f"{sorter}{sorter_dir_suffix}"} already exists')
+        return
     if sorter in ['spykingcircus2']:
         container_flag=False
         sorting_kwargs={}
@@ -139,10 +142,10 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         #                                               )
     aggregate_sorting.save(folder=rec_dir / f'{sorter}{sorter_dir_suffix}'/'si_output', overwrite=True,verbose=True)
 
-    if len(preprocessed_recs) > 1:
-        # get date_str
-        sess_date = datetime.strptime(dirs2sort[0].parts[-1].split('_')[1][:10], '%Y-%m-%d').strftime('%y%m%d')
-        subprocess.run(f'python split_concat.py config.yaml {sess_date} --ow_flag 1'.split(' '),shell=True)
+    # if len(preprocessed_recs) > 1:
+    #     # get date_str
+    #     sess_date = datetime.strptime(dirs2sort[0].parts[-1].split('_')[1][:10], '%Y-%m-%d').strftime('%y%m%d')
+    #     subprocess.run(f'python split_concat.py config.yaml {sess_date} --ow_flag 1'.split(' '),shell=True)
 
     return aggregate_sorting
 
@@ -271,6 +274,7 @@ if __name__ == "__main__":
     parser.add_argument('config_file')
     parser.add_argument('--datadir',default=None)
     parser.add_argument('--extra_datadirs',default='')
+    parser.add_argument('--ow_flag',default=False)
     args = parser.parse_args()
     with open(args.config_file,'r') as file:
         config = yaml.safe_load(file)
@@ -281,7 +285,7 @@ if __name__ == "__main__":
     sorter_name = config['sorter']
     if args.datadir:
         folder = args.datadir
-        if args.extra_datadirs:
+        if args.extra_datadirs and not args.extra_datadirs == 'na':
             extra_folders = [ceph_dir / posix_from_win(e) for e in args.extra_datadirs.split(';')]
         else:
             extra_folders = []
@@ -294,9 +298,11 @@ if __name__ == "__main__":
             rec_dir_suffix = '_concat'
 
     logger.info(f'loaded config for {folder[-1]}')
-    ow_flag = config.get('ow_flag',False)
+    ow_flag = args.ow_flag if args.ow_flag else config.get('ow_flag',False)
     container_flag = config.get('container_flag', False)
     block_idx = config.get('block_idx', 0)
+
+    print(f'{args = }')
 
     recording_dir = ceph_dir/posix_from_win(folder)
     sorter_output = sort_recording(recording_dir,sorter_name,probe_name=config['probe_name'],

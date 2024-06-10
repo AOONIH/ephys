@@ -12,32 +12,57 @@ import pandas as pd
 from scipy import signal
 from matplotlib import pyplot as plt
 import shutil
+from tqdm import tqdm
+import multiprocessing
+import subprocess
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file')
     parser.add_argument('sess_dates')
-    parser.add_argument('--ow_flag',default=0)
+    parser.add_argument('--ow_flag',default=0,type=int)
     args = parser.parse_args()
 
     with open(args.config_file,'r') as file:
         config = yaml.safe_load(file)
     sys_os = platform.system().lower()
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
+    print(args.sess_dates)
+    assert args.sess_dates and '_' in args.sess_dates
     sess_names = args.sess_dates.split('-')
     ephys_dir = ceph_dir / 'Dammy' / 'ephys'
     # ephys_dir = ceph_dir / posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\rawdata')
     assert ephys_dir.is_dir()
     for sess_name in sess_names:
         dir1_name, dir2_name = 'sorting_no_si_drift', 'kilosort2_5_ks_drift'
+        date_str = datetime.strptime(sess_name.split('_')[-1],'%y%m%d').strftime('%Y-%m-%d')
+        sorting_dirs = get_sorting_dirs(ephys_dir, f'{sess_name.split("_")[0]}_{date_str}', dir1_name, dir2_name)
+        if len(sorting_dirs) < 2:
+            single_sorting,single_rec = get_sorting_objs(sorting_dirs)
+            postprocess(single_rec[0],single_sorting[0],sorting_dirs[0])
+            continue
         concat_dirs = get_sorting_dirs(ephys_dir, sess_name, dir1_name, dir2_name)
         concat_sorting, concat_rec = get_sorting_objs(concat_dirs)
         if not (concat_dirs[0].parent/'good_units.csv').is_file() or args.ow_flag:
             postprocess(concat_rec[0], concat_sorting[0], concat_dirs[0])
         concat_dir = concat_dirs[0]
-        date_str = datetime.strptime(sess_name.split('_')[-1],'%y%m%d').strftime('%Y-%m-%d')
-        sorting_dirs = get_sorting_dirs(ephys_dir, f'{sess_name.split("_")[0]}_{date_str}', dir1_name, dir2_name)
-        segment_info = pd.read_csv(concat_dir.parent.parent/'preprocessed' / 'segment_info.csv')
+        concat_preprocessed_dir = concat_dir
+        while not (concat_preprocessed_dir/'preprocessed').is_dir():
+            concat_preprocessed_dir = concat_preprocessed_dir.parent
+        concat_preprocessed_dir = concat_preprocessed_dir/'preprocessed'
+
+        try: segment_info = pd.read_csv(concat_preprocessed_dir / 'segment_info.csv')
+        except FileNotFoundError: segment_info = pd.DataFrame()
+
+        segments = []
+
+        if segment_info.empty:
+            for s_dir in sorting_dirs:
+                while not (s_dir/'preprocessed').is_dir():
+                    s_dir = s_dir.parent
+                s_dir_preprocessed = si.load_extractor(s_dir/'preprocessed')
+                segments.append(s_dir_preprocessed.get_num_frames())
+            segment_info['n_frames'] = segments
 
         print(f'splitting recordings for {concat_dirs[0]}')
         split_recordings,split_sortings = [[obj.frame_slice(start, start+n_frames)
@@ -58,3 +83,37 @@ if __name__ == '__main__':
          for sort_dir in sorting_dirs]
 
         print(f'finished splitting recordings for {concat_dirs[0]}')
+    print('done')
+    # cnt=0
+
+    # for folder in ephys_dir.iterdir():
+    #     try:
+    #         shutil.rmtree(folder/'sorting_no_si_drift'/'sorting_no_si_drift')
+    #     except:
+    #         pass
+    #     try:
+    #         shutil.rmtree(folder/'sorting_no_si_drift'/'kilosort2_5_ks_drift'/'sorting_no_si_drift')
+    #     except:
+    #         pass
+    #     try:
+    #         shutil.rmtree(folder/'sorting_no_si_drift'/'in_container_python_base')
+    #     except:
+    #         pass
+    #     if (folder/'sorting_no_si_drift').is_dir():
+    #         for ff in (folder/'sorting_no_si_drift').iterdir():
+    #             try:
+    #                 shutil.rmtree(ff/'sorting_no_si_drift')
+    #             except:
+
+    #                 pass
+
+    # while next(ephys_dir.rglob('sorting_no_si_drift/sorting_no_si_drift')):
+    #     try:
+    #         dir2del = next(ephys_dir.rglob('sorting_no_si_drift/sorting_no_si_drift/sorting_no_si_drift'))
+    #         if dir2del.is_dir():
+    #             subprocess.run(['rm', '-rf', dir2del], check=True)
+    #             cnt+=1
+    #             assert not dir2del.is_dir()
+    #             print(f'{cnt,dir2del}')
+    #     except FileNotFoundError:
+    #         pass

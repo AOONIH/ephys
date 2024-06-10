@@ -66,11 +66,14 @@ def run_decoder(predictors, features, shuffle=False,model='svc', pre_split=None,
     elif model == 'linear':
         model_nb = LinearRegression()
     elif model == 'logistic':
-        model_nb = LogisticRegression()
+        model_nb = LogisticRegression(class_weight='balanced',max_iter=10000,solver='newton-cg')
     else:
         raise Warning('Invalid model')
     rand_idxs = np.random.choice(predictors.shape[0],predictors.shape[0],replace=False)
     predictors, features = predictors[rand_idxs], features[rand_idxs]
+    if np.isnan(predictors).any():
+        print('Nan in predictors, skipping')
+        return np.nan, np.nan, np.nan, np.nan
     if cv_folds:
         kf = KFold(n_splits=cv_folds,shuffle=True)
         x_train, x_test, y_train, y_test = [], [], [], []

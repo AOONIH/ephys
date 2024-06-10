@@ -13,7 +13,7 @@ import pandas as pd
 import re
 
 
-def generate_lick_data_for_variable_pip(sessions, pip):
+def generate_lick_data_for_pip(sessions, pip):
     all_licks_to_pip = pd.concat(
         sessions[sessname].lick_obj.event_licks[f'{pip}_licks']
         for sessname in sessions.keys()
@@ -124,10 +124,12 @@ if __name__ == "__main__":
 
     # get all licks to X
 
-    for pip in ['X','A']:
-        patt_trials_to_pip, none_trials_to_pip = generate_lick_data_for_variable_pip(sessions, pip)
+    # for pip in ['X','A']:
+        patt_trials_to_pip, none_trials_to_pip = generate_lick_data_for_pip(sessions, pip)
         lick_to_pip_plot = plot_lick_data([patt_trials_to_pip, none_trials_to_pip], pip,dict(figsize=(3,2.5)))
-        lick_to_pip_plot[1].set_ylim(0,0.15)
-        lick_to_pip_plot[1].axvline(0,ls='--',color='k',lw=1)
-        lick_to_pip_plot[1].locator_params(axis='both', nbins=3)
-        lick_to_pip_plot[0].savefig(ephys_figdir / f'all_licks_to_{pip}.svg')
+    #     lick_to_pip_plot[1].set_ylim(0,0.15)
+    #     lick_to_pip_plot[1].axvline(0,ls='--',color='k',lw=1)
+    #     lick_to_pip_plot[1].locator_params(axis='both', nbins=3)
+    #     lick_to_pip_plot[0].savefig(ephys_figdir / f'all_licks_to_{pip}.svg')
+    #
+    # pupil_obj = load_pupil_data(ceph_dir/posix_from_win(r'X:\Dammy\mouse_pupillometry\pickles\DO79_2401_fam_preprocessed_w_suffix.pkl'))
