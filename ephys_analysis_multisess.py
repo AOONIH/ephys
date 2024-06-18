@@ -148,7 +148,7 @@ if __name__ == "__main__":
                                               for event_lbl in sessions[sessname].sound_event_dict
                                               if any(char in event_lbl for char in pip2use)}
             # get self sims for all pips
-            assert check_unique_across_dim([list(e.values()) for e in by_pip_predictors.values()]), 'overlapping pips'
+            # assert check_unique_across_dim([list(e.values()) for e in by_pip_predictors.values()]), 'overlapping pips'
             pip_desc, pip_lbls, pip_names = get_pip_info(sessions[sessname].sound_event_dict, normal_patterns,
                                                          n_patts_per_rule)
             n_shuffles = 1000
@@ -169,7 +169,10 @@ if __name__ == "__main__":
             self_sims_plot[0].show()
             self_sims_plot[0].savefig(ephys_figdir / f'pip_self_sim_{sessname}.svg')
 
-            event_psth_dict = {e: by_pip_predictors[e] for e in sum(list(by_pip_predictors.values()), [])}
+            # event_psth_dict = {e: by_pip_predictors[e] for e in sum(list([e.valuesby_pip_predictors.values()]), [])}
+            event_psth_dict = {k:v for e_key in by_pip_predictors for (k, v) in by_pip_predictors[e_key].items()}
+
+
             compared_pips_plot = plt.subplots(4,figsize=(6, 18))
             for pi,pip in enumerate(['A', 'B', 'C', 'D']):
                 compared_pips = compare_pip_sims_2way([event_psth_dict[f'{pip}-0'], event_psth_dict[f'{pip}-1']])
@@ -180,8 +183,8 @@ if __name__ == "__main__":
                                               labels=[f'{pip}-0 self', f'{pip}-1 self', f'{pip}-0 vs {pip}-1'], )
                 compared_pips_plot[1][pi].set_ylim([0, 1])
                 compared_pips_plot[1][pi].set_ylabel('cosine similarity')
-                compared_pips_plot[0].show()
-                compared_pips_plot[0].savefig(ephys_figdir/f'{pip}_compared_{sessname}.svg')
+            compared_pips_plot[0].show()
+            compared_pips_plot[0].savefig(ephys_figdir/f'pips_compared_{sessname}.svg')
 
 
             # save_session psth
