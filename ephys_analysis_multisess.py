@@ -58,7 +58,7 @@ if __name__ == "__main__":
     sort_dirs = get_sorting_dirs(ephys_dir, f'{name}_{date_str}',dir1_name, dir2_name, sorter_dirname)
     sort_dirs = [e for ei,e in enumerate(sort_dirs) if ei in all_sess_info.index]
 
-    ephys_figdir = ceph_dir/'Dammy'/'figures'/'run_240613_single_sorted_sessions'
+    ephys_figdir = ceph_dir/'Dammy'/'figures'/'synth_data'
     if not ephys_figdir.is_dir():
         ephys_figdir.mkdir()
 
@@ -137,7 +137,7 @@ if __name__ == "__main__":
             sessions[sessname].get_event_free_zscore()
 
             sessions[sessname].get_sound_psth(psth_window=psth_window,zscore_flag=True,baseline_dur=0,redo_psth=True,
-                                              use_iti_zscore=False)
+                                              use_iti_zscore=False,synth_data=True)
 
             n_shuffles = 1000
             by_pip_predictors = {}
@@ -701,7 +701,7 @@ if __name__ == "__main__":
             pip_by_pip_sim_plot[0].set_size_inches(20,5*pip_by_pip_sim_plot[1].shape[0])
             pip_by_pip_sim_plot[0].set_layout_engine('tight')
             pip_by_pip_sim_plot[0].show()
-            sim_figdir = ephys_figdir.parent/'by_pip_similarity_by_rule_single_sorted_sessions'
+            sim_figdir = ephys_figdir.parent/'by_pip_similarity_by_rule_synth'
             if not sim_figdir.is_dir():
                 sim_figdir.mkdir()
             pip_by_pip_sim_plot[0].savefig( sim_figdir/ f'by_pip_similarity_{sessname}{"_permute" if permute else ""}_reordered.svg')
