@@ -15,6 +15,15 @@ import os
 
 
 def get_sorting_dirs(ephys_dir:Path, sess_name_date, sorting_dir_name, sorter_dir_name, output_name='si_output'):
+    """
+
+    :param ephys_dir:
+    :param sess_name_date:
+    :param sorting_dir_name:
+    :param sorter_dir_name:
+    :param output_name:
+    :return: sorting directories for all sessions for an animal on a day
+    """
     sess_dirs = sorted(list(ephys_dir.glob(f'*{sess_name_date}*')))
     print(sess_dirs)
     sorting_dirs = [sess / sorting_dir_name / sorter_dir_name / output_name if (sess / sorting_dir_name / sorter_dir_name / output_name).is_dir()

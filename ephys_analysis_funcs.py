@@ -220,6 +220,11 @@ def gen_spike_matrix(spike_time_dict: dict, window, fs):
     return spike_matrix
 
 
+def check_unique_across_dim(arr: [np.ndarray, list],dim2check=0):
+    if isinstance(arr, list):
+        arr = np.vstack(arr)
+    return len(np.unique(arr, axis=dim2check)) == len(arr)
+
 
 def plot_spike_time_raster(spike_time_dict: dict, ax=None, **pltkwargs):
     if not ax:
@@ -1418,3 +1423,14 @@ def permute_pip_preds(preds_dict:dict):
     all_pip_arr_shuffled = all_pip_arr[np.random.permutation(all_pip_arr.shape[0])]
     shuffled_split = np.array_split(all_pip_arr_shuffled, np.cumsum(n_by_pip))[:-1]
     return shuffled_split
+
+
+def get_pip_info(sound_event_dict,normal_patterns,n_patts_per_rule):
+    pip_idxs = {event_lbl: sound_event_dict[event_lbl].idx
+                for event_lbl in sound_event_dict
+                if any(char in event_lbl for char in 'ABCD')}
+    pip_lbls = list(pip_idxs.keys())
+    pip_desc = {pip: {} for pip in pip_idxs}  # position in pattern, label, index
+    pip_names = {idx: lbl for idx, lbl in zip(sum(normal_patterns, []), 'ABCD' * len(normal_patterns))}
+    [pip_desc.update({pip: get_pip_desc(pip, pip_idxs, pip_names, n_patts_per_rule)}) for pip in pip_idxs]
+    return pip_desc, pip_lbls,pip_names

@@ -20,6 +20,7 @@ from sythesise_spikes import integrated_oscillator, random_projection,generate_s
 import quantities as pq
 from IPython.display import HTML
 from IPython import display
+from neural_similarity_funcs import compare_pip_sims_2way,plot_similarity_mat
 
 
 def get_population_pca(rate_arr:np.ndarray):
@@ -431,7 +432,14 @@ video = anim.to_html5_video()
 html = display.HTML(video)
 display.display(html)
 
-writervideo = animation.FFMpegWriter(fps=10)
-anim.save(f'{pip}_evolution.mp4', writer=writervideo)
 
-HTML(anim.to_jshtml(default_mode='once'))
+for pip in ['A', 'B', 'C', 'D']:
+    compared_pips = compare_pip_sims_2way([event_psth_dict[f'{pip}-0'], event_psth_dict[f'{pip}-1']])
+
+    compared_pips_plot = plt.subplots()
+    mean_comped_sims = [np.squeeze(pip_sims)[:,0,1] for pip_sims in np.array_split(compared_pips[0], 2)]
+    mean_comped_sims.append(np.squeeze(compared_pips[1][:,0,1]))
+    compared_pips_plot[1].boxplot(mean_comped_sims, labels=[f'{pip}-0 self', f'{pip}-1 self', f'{pip}-0 vs {pip}-1'], )
+    compared_pips_plot[1].set_ylim([0, 1])
+    compared_pips_plot[0].show()
+    compared_pips_plot[0].savefig(f'{pip}_compared_{sessname}.svg')

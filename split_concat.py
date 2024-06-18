@@ -21,25 +21,42 @@ if __name__ == '__main__':
     parser.add_argument('config_file')
     parser.add_argument('sess_dates')
     parser.add_argument('--ow_flag',default=0,type=int)
+    parser.add_argument('--sess_top_filts', default='')
     args = parser.parse_args()
 
     with open(args.config_file,'r') as file:
         config = yaml.safe_load(file)
     sys_os = platform.system().lower()
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
-    print(args.sess_dates)
+    print(args)
     assert args.sess_dates and '_' in args.sess_dates
     sess_names = args.sess_dates.split('-')
     ephys_dir = ceph_dir / 'Dammy' / 'ephys'
     # ephys_dir = ceph_dir / posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\rawdata')
     assert ephys_dir.is_dir()
+
+    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
+    session_topology = pd.read_csv(sess_topology_path)
+
     for sess_name in sess_names:
+        name, date = args.sess_dates.split('_')
+        date = int(date)
+        all_sess_info = session_topology.query('name==@name & date==@date').reset_index(drop=True)
+        if args.sess_top_filts:
+            all_sess_info = all_sess_info.query(args.sess_top_filts)
         dir1_name, dir2_name = 'sorting_no_si_drift', 'kilosort2_5_ks_drift'
         date_str = datetime.strptime(sess_name.split('_')[-1],'%y%m%d').strftime('%Y-%m-%d')
         sorting_dirs = get_sorting_dirs(ephys_dir, f'{sess_name.split("_")[0]}_{date_str}', dir1_name, dir2_name)
+        sorting_dirs = [e for ei,e in enumerate(sorting_dirs) if ei in all_sess_info.index]
+
         if len(sorting_dirs) < 2:
             single_sorting,single_rec = get_sorting_objs(sorting_dirs)
             postprocess(single_rec[0],single_sorting[0],sorting_dirs[0])
+            spike_vectors = [sorting.to_spike_vector() for sorting in single_sorting]
+            [np.save(sort_dir.parent / f'si_output' / 'spike_times.npy', [e['sample_index'] for e in spikes])
+             for sort_dir, spikes in zip(sorting_dirs, spike_vectors)]
+            [np.save(sort_dir.parent / f'si_output' / 'spike_clusters.npy', [e['unit_index'] for e in spikes])
+             for sort_dir, spikes in zip(sorting_dirs, spike_vectors)]
             continue
         concat_dirs = get_sorting_dirs(ephys_dir, sess_name, dir1_name, dir2_name)
         concat_sorting, concat_rec = get_sorting_objs(concat_dirs)

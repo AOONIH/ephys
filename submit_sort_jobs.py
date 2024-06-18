@@ -83,7 +83,7 @@ if __name__ == '__main__':
             concat_flag = 'from_concat' if sess_info.shape[0] > 1 else 'si_output'
             cmd = cmd.replace('<redo_sorting>',str(args.redo_sorting)).replace('<redo_analysis>',str(args.redo_analysis)).replace('<output2use>',concat_flag)
             print(cmd)
-            subprocess.run(cmd.split())
+            subprocess.run(cmd.split()+[f'{args.sess_top_filts}'])
 
         # date_str = datetime.strptime(session.split('_')[1], '%y%m%d').strftime('%Y-%m-%d')
 

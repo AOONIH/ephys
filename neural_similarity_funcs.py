@@ -3,7 +3,9 @@ import numpy as np
 from matplotlib import pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
 from ephys_analysis_funcs import plot_2d_array_with_subplots
-
+from itertools import combinations
+from tqdm import tqdm
+from copy import deepcopy as copy
 
 
 def plot_similarity_mat(sim_mat: np.ndarray, pip_lbls: [str, ], cmap='viridis', plot=None, reorder_idx=None,plot_cbar=True,
@@ -58,3 +60,41 @@ def get_reordered_idx(pip_desc,pip_lbls,sort_keys,subset=None):
                                                                        for sort_key in sort_keys])
                             if p in subset]]
     return plot_names, plot_order
+
+
+def compute_self_similarity(pop_rate_mat:np.ndarray, cv_folds=5):
+    assert cv_folds > 1, 'cv_folds must be > 1'
+    all_splits = list(combinations(range(cv_folds),cv_folds-1))
+    split_pop_mats = np.array_split(pop_rate_mat, cv_folds)[:cv_folds]
+    all_train_mats = [[split_pop_mats[i].mean(axis=0) for i in split] for split in all_splits]
+    # [print(e.shape) for e in all_train_mats[0]]
+    all_test_mats = [[split_pop_mats[i].mean(axis=0) for i in range(cv_folds) if i not in split]
+                     for split in all_splits]
+    fold_sims = [[cosine_similarity([e[:,-1] for e in [np.mean(train_mats,axis=0), np.mean(test_mats,axis=0)]])[0,1]]
+                 for train_mats, test_mats in zip(all_train_mats, all_test_mats)]
+
+    return fold_sims
+
+
+def compare_pip_sims_2way(pop_rate_mats: [np.ndarray,np.ndarray],n_shuffles=1000):
+    assert len(pop_rate_mats) == 2
+    self_sims_by_halves = [[[cosine_similarity([np.squeeze(e).mean(axis=0)[:,-1] for e in np.array_split(rate_mat[shuffle],2)])]
+                            for shuffle in tqdm([np.random.permutation(rate_mat.shape[0])
+                                                 for _ in range(n_shuffles)], desc='shuffle self sims', total= n_shuffles)
+                            ]
+                           for rate_mat in pop_rate_mats]
+
+    self_sims_by_halves = np.squeeze(np.array(self_sims_by_halves))
+    shuffled_idxs = [[np.random.permutation(rate_mat.shape[0]) for rate_mat in pop_rate_mats] for _ in range(n_shuffles)]
+
+    # [print([np.array_split(e[idx],2)[0].mean(axis=0)[:,-1].shape
+    #                     for e, idx in zip(pop_rate_mats, idxs)])
+    #  for idxs in tqdm(shuffled_idxs, desc='shuffle across sims', total=n_shuffles)]
+    across_sims_by_halves = [cosine_similarity([np.squeeze(e)[idx[::2]].mean(axis=0)[:,-1]
+                                                for e, idx in zip(pop_rate_mats, idxs) ])
+                             for idxs in tqdm(shuffled_idxs, desc='shuffle across sims', total=n_shuffles)]
+
+    across_sims_by_halves = np.squeeze(np.array(across_sims_by_halves))
+
+    return self_sims_by_halves, across_sims_by_halves,shuffled_idxs
+

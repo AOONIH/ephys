@@ -42,7 +42,7 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
             base_dir = Path(base_dir)
         logger.debug(f'rec_dir = {rec_dir}: {rec_dir.is_dir()}')
 
-        if not rec_dir.is_dir() or ow_flag:
+        if not rec_dir.is_dir():
             rec_dir.mkdir()
 
         if not preprocessed_dir.is_dir():
@@ -274,7 +274,7 @@ if __name__ == "__main__":
     parser.add_argument('config_file')
     parser.add_argument('--datadir',default=None)
     parser.add_argument('--extra_datadirs',default='')
-    parser.add_argument('--ow_flag',default=False)
+    parser.add_argument('--ow_flag',default=0,type=int)
     args = parser.parse_args()
     with open(args.config_file,'r') as file:
         config = yaml.safe_load(file)
