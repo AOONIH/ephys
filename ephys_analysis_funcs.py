@@ -23,7 +23,7 @@ from elephant.statistics import instantaneous_rate
 from quantities import s, ms
 from neo import SpikeTrain
 from elephant.kernels import GaussianKernel
-
+from generate_synthetic_spikes import gen_responses
 
 # import seaborn as sns
 # from os import register_at_fork
@@ -184,6 +184,8 @@ def get_spike_times_in_window(event_time: int, spike_time_dict: dict, window: [l
         all_spikes = (spike_time_dict[cluster_id] - event_time)  # / fs
 
         window_spikes_dict[cluster_id] = all_spikes[(all_spikes >= window[0]) * (all_spikes <= window[1])]
+
+
     return window_spikes_dict
 
 
@@ -208,6 +210,7 @@ def gen_spike_matrix(spike_time_dict: dict, window, fs):
     time_cols = np.round(np.arange(window[0], window[1] + 1 / fs, 1 / fs), precision)
     # spike_matrix = pd.DataFrame(np.zeros((len(spike_time_dict), int((window[1] - window[0]) * fs) + 1)),
     #                             index=list(spike_time_dict.keys()), columns=time_cols)
+
 
     event_psth = [np.squeeze(np.array(instantaneous_rate(SpikeTrain(c_spiketimes * s,
                                                                     t_start=window[0], t_stop=window[-1]*s+0.011*s),
@@ -491,20 +494,20 @@ class SessionSpikes:
                          window: [list | np.ndarray], get_spike_matrix=True):
         if self.event_cluster_spike_times is None:
             self.event_cluster_spike_times = multiprocessing.Manager().dict()
+            for event_time in event_times:
+                if f'{event_name}_{event_time}' not in list(self.event_cluster_spike_times.keys()):
+                    self.event_cluster_spike_times[f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,
+                                                                                                             self.cluster_spike_times_dict,
+                                                                                                             window,
+                                                                                                             self.new_fs)
+                if get_spike_matrix:
+                    if self.event_spike_matrices is None:
+                        self.event_spike_matrices = multiprocessing.Manager().dict()
+                    if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
+                        self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(
+                            self.event_cluster_spike_times[f'{event_name}_{event_time}'],
+                            window, self.new_fs)
 
-        for event_time in event_times:
-            if f'{event_name}_{event_time}' not in list(self.event_cluster_spike_times.keys()):
-                self.event_cluster_spike_times[f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,
-                                                                                                         self.cluster_spike_times_dict,
-                                                                                                         window,
-                                                                                                         self.new_fs)
-            if get_spike_matrix:
-                if self.event_spike_matrices is None:
-                    self.event_spike_matrices = multiprocessing.Manager().dict()
-                if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
-                    self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(
-                        self.event_cluster_spike_times[f'{event_name}_{event_time}'],
-                        window, self.new_fs)
 
     def curate_units(self):
         # self.bad_units = set()
@@ -587,7 +590,7 @@ def plot_decoder_accuracy(decoder_accuracy, labels, fig=None, ax=None, start_loc
 
 def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Series, np.ndarray, list],
                    window: [float, float], event_lbl: str, baseline_dur=0.25, zscore_flag=False, iti_zscore=None,
-                   gaus_std=0.04) -> (
+                   gaus_std=0.04, synth_data=None) -> (
         np.ndarray, pd.DataFrame):
     if iti_zscore:
         zscore_flag = False
@@ -596,7 +599,14 @@ def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Se
 
     sess_spike_obj.get_event_spikes(event_times, f'{event_idx}', window)
     event_keys = [f'{event_idx}_{t}' for t in event_times]
-    all_event_list = [sess_spike_obj.event_spike_matrices[key]for key in event_keys]
+    if synth_data is None:
+        all_event_list = [sess_spike_obj.event_spike_matrices[key]for key in event_keys]
+    else:
+        unit_rates = np.random.rand(len(sess_spike_obj.clusters) * 40)
+        synth_times = gen_responses(unit_rates, len(event_times), np.arange(window[0],window[1],0.002))
+        spike_trains = [[SpikeTrain(ee, t_start=window[0], t_stop=window[1]*s+0.11*s, units=s) for ee in e] for e in synth_times]
+        all_event_list = np.array([instantaneous_rate(st, 100 * ms, kernel=GaussianKernel(40*ms)).T for st in spike_trains])
+
     # all_events_stacked = np.vstack(all_event_list)
     # all_event_mean = pd.DataFrame(np.array(all_event_list).mean(axis=0))
     # all_event_mean = pd.DataFrame(all_events_stacked)
@@ -605,18 +615,18 @@ def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Se
     # rate_mat_stacked = gen_firing_rate_matrix(all_event_mean, baseline_dur=baseline_dur,
     #                                           zscore_flag=False,gaus_std=gaus_std)  # -all_events.values[:,:1000].mean(axis=1,keepdims=True)
     # ratemat_arr3d = rate_mat_stacked.values.reshape((len(all_event_list), -1, rate_mat_stacked.shape[1]))
-    ratemat_arr3d = np.array(all_event_list)
-
+    ratemat_arr3d = np.array(all_event_list) if isinstance(all_event_list, list) else all_event_list
+    x_ser = np.linspace(window[0], window[1], ratemat_arr3d.shape[-1])
     rate_mat = pd.DataFrame(ratemat_arr3d.mean(axis=0),
-                            columns=all_event_list[0].columns)
+                            columns=x_ser)
     rate_mat.index = sess_spike_obj.units
     # rate_mat = rate_mat.assign(m=rate_mat.loc[:,timedelta(0,0):timedelta(0,0.2)].mean(axis=1)
     #                            ).sort_values('m',ascending=False).drop('m', axis=1)
     # sorted_arrs = [e.iloc[rate_mat.index.to_series()] for e in all_event_list]
-    sorted_arrs = all_event_list
+    # sorted_arrs = all_event_list
     # rate_mat = rate_mat.sort_values(by=timedelta(0, 0.2), ascending=False
 
-    return np.array(sorted_arrs), rate_mat, rate_mat.index
+    return ratemat_arr3d, rate_mat, rate_mat.index
 
 
 def plot_psth(psth_rate_mat, event_lbl, window, title='', cbar_label=None, cmap='hot', **im_kwargs):
@@ -703,11 +713,12 @@ class SoundEvent:
         self.psth_plot = None
 
     def get_psth(self, sess_spike_obj: SessionSpikes, window, title='', redo_psth=False, redo_psth_plot=False,
-                 baseline_dur=0.25, zscore_flag=False, iti_zscore=None, reorder_idxs=None):
+                 baseline_dur=0.25, zscore_flag=False, iti_zscore=None, reorder_idxs=None,synth_data=None):
 
         if not self.psth or redo_psth:
             self.psth = get_event_psth(sess_spike_obj, self.idx, self.times, window, self.lbl,
-                                       baseline_dur=baseline_dur, zscore_flag=zscore_flag, iti_zscore=None)
+                                       baseline_dur=baseline_dur, zscore_flag=zscore_flag, iti_zscore=None,
+                                       synth_data=synth_data)
             if iti_zscore:
                 self.psth = (self.psth[0],zscore_by_unit(self.psth[1],unit_means=iti_zscore[0],unit_stds=iti_zscore[1]),
                              self.psth[2])
