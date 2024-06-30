@@ -24,6 +24,13 @@ from IPython import display
 from neural_similarity_funcs import compare_pip_sims_2way,plot_similarity_mat
 
 
+def get_event_response(event_response_dict, events):
+    event_responses = [np.array_split(event_response_dict[e], event_response_dict[e].shape[0], axis=0)
+                    for e in events]
+    event_responses = [[np.squeeze(ee) for ee in e] for e in event_responses]
+
+    return event_responses
+
 def get_population_pca(rate_arr:np.ndarray):
 
     assert rate_arr.ndim == 3
@@ -261,9 +268,9 @@ if __name__ == '__main__':
         # eig_vals = compute_eig_vals(Xa_trial_concatenated,plot_flag=True)
         # Xa_trial_concatenated_pca = compute_trial_averaged_pca(Xa_trial_concatenated,n_components=15,standardise=True)
 
-        event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-                        for e in events]
-        event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
+        # event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
+        #                 for e in events]
+        event_trials = get_event_response(event_psth_dict,events)
 
         # event_trials = _all_trials
         projected_trials_by_event = [[project_pca(trial,Xa_trial_concatenated_pca,standardise=False)
@@ -312,9 +319,9 @@ if __name__ == '__main__':
     for ii,pip in enumerate(['A','B','C','D','base']):
         events = [e for e in event_psth_dict if pip in e]
 
-        event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-                        for e in events]
-        event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
+        # event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
+        #                 for e in events]
+        event_trials = get_event_response(event_psth_dict, events)
         projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
                                       for trial in trials_by_event] for trials_by_event in event_trials]
         for ax in axes:
@@ -356,16 +363,12 @@ if __name__ == '__main__':
     fig.show()
     fig.savefig(f'{sessname}_pca_3d.svg')
 
-
-
     # for ii, pip in enumerate(['A', 'B', 'C', 'D']):
     pip = 'A'
     fig, axes = plt.subplots(ncols=2, figsize=[9, 4], subplot_kw={'projection': '3d'})
     events = [e for e in event_psth_dict if e.startswith(pip)]
 
-    event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-                    for e in events]
-    event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
+
     projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
                                   for trial in trials_by_event] for trials_by_event in event_trials]
 
