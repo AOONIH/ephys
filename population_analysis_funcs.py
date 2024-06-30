@@ -124,6 +124,54 @@ def cross_val_gpfa(spike_trains, x_dims):
     return log_likelihoods
 
 
+def plot_pca_traj(trajectories, pc_idxs, mean_axis=None, plot=None, subset=None, plt_kwargs=None):
+
+    if plot:
+        fig: plt.Figure = plot[0]
+        ax:plt.Axes = plot[1]
+        assert not isinstance(ax,np.ndarray), 'ax must be a single axis'
+    else:
+        plot = plt.subplots()
+        fig: plt.Figure = plot[0]
+        ax: plt.Axes = plot[1]
+
+    by_pc_traj = [trajectories[idx] for idx in pc_idxs]
+    if subset is not None:
+        by_pc_traj = [traj[subset] for traj in by_pc_traj]
+
+    if mean_axis is not None:
+        by_pc_traj = [traj.mean(axis=mean_axis) for traj in by_pc_traj]
+    if len(by_pc_traj) == 2:
+        ax.plot(by_pc_traj[0],by_pc_traj[1], **plt_kwargs)
+    elif len(by_pc_traj) == 3:
+        ax.plot(by_pc_traj[0],by_pc_traj[1],by_pc_traj[2], **plt_kwargs)
+    if mean_axis is not None:
+        if len(by_pc_traj) == 2:
+            ax.scatter(by_pc_traj[0][0],by_pc_traj[1][0],c=plt_kwargs.get('c','k'))
+        elif len(by_pc_traj) == 3:
+            ax.scatter(by_pc_traj[0][0],by_pc_traj[1][0],by_pc_traj[2][0],c=plt_kwargs.get('c','k'))
+
+    set_label_funcs = (ax.set_xlabel,ax.set_ylabel,ax.set_zlabel)
+    [label_ax(f'PC {pc_idx}') for label_ax,pc_idx in zip(set_label_funcs,pc_idxs)]
+    # ax.set_xlabel(f'PC {pc_idxs[0]}')
+    # ax.set_ylabel(f'PC {pc_idxs[1]}')
+    return fig,ax
+
+def style_3d_ax(ax):
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_zticks([])
+    ax.xaxis.pane.fill = False
+    ax.yaxis.pane.fill = False
+    ax.zaxis.pane.fill = False
+    ax.xaxis.pane.set_edgecolor('w')
+    ax.yaxis.pane.set_edgecolor('w')
+    ax.zaxis.pane.set_edgecolor('w')
+    ax.set_xlabel('PC 1')
+    ax.set_ylabel('PC 2')
+    ax.set_zlabel('PC 3')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file')
@@ -254,19 +302,6 @@ if __name__ == '__main__':
 
 
     # utility function to clean up and label the axes
-    def style_3d_ax(ax):
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_zticks([])
-        ax.xaxis.pane.fill = False
-        ax.yaxis.pane.fill = False
-        ax.zaxis.pane.fill = False
-        ax.xaxis.pane.set_edgecolor('w')
-        ax.yaxis.pane.set_edgecolor('w')
-        ax.zaxis.pane.set_edgecolor('w')
-        ax.set_xlabel('PC 1')
-        ax.set_ylabel('PC 2')
-        ax.set_zlabel('PC 3')
 
 
     sigma = 3  # smoothing amount
@@ -322,40 +357,6 @@ if __name__ == '__main__':
     fig.savefig(f'{sessname}_pca_3d.svg')
 
 
-    def animate(i):
-        ax.clear()
-        style_3d_ax(ax)
-        ax.view_init(elev=22, azim=30)
-        print(i)
-        for t, t_type in enumerate(projected_trials_by_event):
-            proj_arr = np.array(t_type).mean(axis=0)
-            # for every trial type, select the part of the component
-            # which corresponds to that trial type:
-            x = proj_arr[component_x][0:i]
-            y = proj_arr[component_y][0:i]
-            z = proj_arr[component_z][0:i]
-            print(x.shape)
-            # apply some smoothing to the trajectories
-            # x = gaussian_filter1d(x, sigma=sigma)
-            # y = gaussian_filter1d(y, sigma=sigma)
-            # z = gaussian_filter1d(z, sigma=sigma)
-
-            stim_mask = np.logical_and(x_ser >= 0, x_ser <= 0.25)
-            z_stim = z.copy()
-            # z_stim[~stim_mask] = np.nan
-            # z_prepost = z.copy()
-            # z_prepost[stim_mask] = np.nan
-
-            ax.plot(x, y, z, c=f'C{t}')
-            # ax.plot(x, y, z_prepost, c=f'C{t}', ls=':')
-
-        # ax.set_xlim((-12, 12))
-        # ax.set_ylim((-12, 12))
-        # ax.set_zlim((-13, 13))
-        ax.view_init(elev=22, azim=30)
-
-        return []
-
 
     # for ii, pip in enumerate(['A', 'B', 'C', 'D']):
     pip = 'A'
@@ -367,11 +368,6 @@ if __name__ == '__main__':
     event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
     projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
                                   for trial in trials_by_event] for trials_by_event in event_trials]
-    #
-    # anim = animation.FuncAnimation(fig, animate, frames=x_ser.shape[0], interval=50,blit=True)
-    # video = anim.to_html5_video()
-    # html = display.HTML(video)
-    # display.display(html)
 
     # group by rare or freq
     sessions[sessname].td_df['cum_patts'] = np.cumsum(sessions[sessname].td_df['Tone_Position']==0)
@@ -385,34 +381,13 @@ if __name__ == '__main__':
     by_cond_trial_idxs = [[np.argwhere(idx == patt_trial_idxs)[0] for idx in cond_idxs if idx in patt_trial_idxs]
                           for cond_idxs in by_cond_trial_nums]
     by_cond_trial_idxs = [np.hstack(e) for e in by_cond_trial_idxs]
-    def plot_2d_pca_traj(trajectories,pc_idxs,mean_axis=None, plot=None,subset=None,plt_kwargs=None):
 
-        if plot:
-            fig: plt.Figure = plot[0]
-            ax:plt.Axes = plot[1]
-            assert not isinstance(ax,np.ndarray), 'ax must be a single axis'
-        else:
-            plot = plt.subplots()
-            fig: plt.Figure = plot[0]
-            ax: plt.Axes = plot[1]
-
-        by_pc_traj = [trajectories[idx] for idx in pc_idxs]
-        if subset is not None:
-            by_pc_traj = [traj[subset] for traj in by_pc_traj]
-
-        if mean_axis is not None:
-            by_pc_traj = [traj.mean(axis=mean_axis) for traj in by_pc_traj]
-        ax.plot(by_pc_traj[0],by_pc_traj[1], **plt_kwargs)
-        if mean_axis is not None:
-            ax.scatter(by_pc_traj[0][0],by_pc_traj[1][0],c=plt_kwargs.get('c','k'))
-        ax.set_xlabel(f'PC {pc_idxs[0]}')
-        ax.set_ylabel(f'PC {pc_idxs[1]}')
-        return fig,ax
 
     by_cond_ls = ['-','--']
     cond_lbls = ['rare', 'freq']
     pc_combs = list(combinations(range(3), 2))
     pca_traj_plot = plt.subplots(ncols=len(pc_combs), figsize=[9, 4], sharey=True)
+    pca_traj_plot_3d = plt.subplots(subplot_kw={'projection': '3d'})
     for pi, pip in enumerate('A'):
         events = [e for e in event_psth_dict if pip in e]
 
@@ -423,12 +398,53 @@ if __name__ == '__main__':
         projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
                                       for trial in trials_by_event] for trials_by_event in event_trials]
         trajs2plot = np.transpose(np.array(projected_trials_by_event[0]),(1,0,2))
-        [[[plot_2d_pca_traj(trajs2plot,pc_comb,mean_axis=mean_type,subset=cond_subset-1,
-                           plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label':lbl},
-                          plot=(pca_traj_plot[0],pca_traj_plot[1][comb_i]))
-         for comb_i,pc_comb in enumerate(pc_combs)]
+        [[[plot_pca_traj(trajs2plot, pc_comb, mean_axis=mean_type, subset=cond_subset - 1,
+                         plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label': lbl},
+                         plot=(pca_traj_plot[0],pca_traj_plot[1][comb_i]))
+           for comb_i,pc_comb in enumerate(pc_combs)]
          for cond_subset,cond_ls,lbl in zip(by_cond_trial_idxs,by_cond_ls,cond_lbls)]
+         for mean_type, mean_lw in zip([0],[2,0.1])]
+        [[plot_pca_traj(trajs2plot, [0,1,2], mean_axis=mean_type,
+                        plot=(pca_traj_plot_3d[0], pca_traj_plot_3d[1]),
+                        plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label': lbl})
+          for cond_subset,cond_ls,lbl in zip(by_cond_trial_idxs,by_cond_ls,cond_lbls)]
          for mean_type, mean_lw in zip([0],[2,0.1])]
     pca_traj_plot[1][-1].legend()
     pca_traj_plot[0].show()
     pca_traj_plot[0].savefig(f'{sessname}_pca_trajs.svg')
+
+    pca_traj_plot_3d[1].legend()
+    pca_traj_plot_3d[0].show()
+    pca_traj_plot_3d[0].savefig(f'{sessname}_pca_trajs_3d.svg')
+
+#
+# from mpl_toolkits.mplot3d import Axes3D
+# import numpy as np
+# from matplotlib import pyplot as plt
+# import matplotlib.animation as animation
+# import pandas as pd
+#
+# a = np.random.rand(2000, 3)*10
+# t = np.array([np.ones(100)*i for i in range(20)]).flatten()
+# df = pd.DataFrame({"time": t ,"x" : a[:,0], "y" : a[:,1], "z" : a[:,2]})
+#
+# def update_graph(num):
+#     data=df[df['time']==num]
+#     graph._offsets3d = (data.x, data.y, data.z)
+#     title.set_text('3D Test, time={}'.format(num))
+#     return graph, title
+#
+# fig = plt.figure()
+#
+# ax = fig.add_subplot(221, projection='3d')
+# ax2 = fig.add_subplot(222, projection='3d')
+# title = ax.set_title('3D Test')
+# ax.scatter(df.x, df.y, df.z)
+#
+# data=df[df['time']==0]
+# graph = ax2.scatter(data.x, data.y, data.z)
+#
+# ani = animation.FuncAnimation(fig, update_graph, 20,
+#                                    interval=50, blit=True)
+# ani.save('motion.gif', writer="imagemagick")
+# plt.show()
