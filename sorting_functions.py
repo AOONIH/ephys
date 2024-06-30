@@ -54,7 +54,7 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
             raw_files = []
 
         preprocessed_rec = None
-        if raw_files and not ow_flag:
+        if raw_files:# and not ow_flag:
             try:
                 preprocessed_rec = si.load_extractor(preprocessed_dir)
                 logger.debug('read processed preprocessed folder')
@@ -113,13 +113,15 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
     #                                               working_folder=rec_dir / sorter,
     #                                               singularity_image=container_flag,
     #                                               remove_existing_folder=True,verbose=True)
-    sorting_kwargs = dict(do_correction=True,n_jobs=os.cpu_count()-1, minFR=0.1,delete_tmp_files=False)
+    # sorting_kwargs = dict(do_correction=False,n_jobs=os.cpu_count()-1, minFR=0.1,delete_tmp_files=False)
+    drift_corr_flag = False if 'no_ks_drift' in sorter_dir_suffix else True
+    sorting_kwargs = dict(do_correction=drift_corr_flag)
     if (rec_dir / f"{sorter}{sorter_dir_suffix}").is_dir() and not ow_flag:
         logger.debug(f'{rec_dir / f"{sorter}{sorter_dir_suffix}"} already exists')
         return
     if sorter in ['spykingcircus2']:
         container_flag=False
-        sorting_kwargs={}
+        sorting_kwargs = {}
     logger.debug('Launching sorter')
     if sorter == 'spykingcircus2':
         aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=all_recordings,
@@ -131,7 +133,7 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         logger.debug(f'kilosort outdir = {rec_dir / f"{sorter}{sorter_dir_suffix}"}')
         aggregate_sorting = si.run_sorter(sorter_name=sorter, recording=all_recordings,
                                           output_folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
-                                          singularity_image=container_flag, delete_container_files=False,
+                                          singularity_image=container_flag, delete_container_files=True,
                                           remove_existing_folder=True,verbose=True, **sorting_kwargs
                                           )
         # aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=all_recordings,
@@ -160,11 +162,9 @@ def get_probe(probe_name):
 
 
 def preprocess(recording,filter_range=(300,9000),rec_dir=''):
-    bad_channels_ids, _ = si.detect_bad_channels(recording)
-    logger.info(f'bad channels = {bad_channels_ids}, total={len(bad_channels_ids)}')
-    recording = recording.remove_channels(bad_channels_ids)
-    recording = si.bandpass_filter(recording, freq_min=filter_range[0], freq_max=filter_range[1])
-    recording = cmr_by_shank(recording)
+    # bad_channels_ids, _ = si.detect_bad_channels(recording)
+    # recording = recording.remove_channels(bad_channels_ids)
+    recording = cmr_by_shank(recording,filter_range)
     job_kwargs = dict(n_jobs=os.cpu_count(), chunk_duration='1s', progress_bar=True)
     logger.debug(f'drift kwargs = {job_kwargs}')
     # recording, motion_info = correct_drift(recording,'nonrigid_fast_and_accurate',rec_dir,job_kwargs)
@@ -172,7 +172,12 @@ def preprocess(recording,filter_range=(300,9000),rec_dir=''):
     return recording
 
 
-def cmr_by_shank(recording):
+def cmr_by_shank(recording,filter_range=(300,9000)):
+    bad_channels_ids, _ = si.detect_bad_channels(recording)
+    logger.info(f'bad channels = {bad_channels_ids}, total={len(bad_channels_ids)}')
+    recording = recording.remove_channels(bad_channels_ids)
+    recording = si.bandpass_filter(recording, freq_min=filter_range[0], freq_max=filter_range[1])
+
     probe_df = recording.get_probe().to_dataframe(complete=True)
     main_ids = copy(recording._main_ids)
     recording._main_ids = recording.ids_to_indices()

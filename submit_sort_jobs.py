@@ -33,7 +33,7 @@ if __name__ == '__main__':
     parser.add_argument('--sess_top_filts', default='')
     parser.add_argument('--analyse_only',default=0,type=int)
     parser.add_argument('--redo_sorting',default=0)
-    parser.add_argument('--redo_analysis',default=0)
+    parser.add_argument('--redo_postprocessing',default=0)
     parser.add_argument('--run_local',default=False)
 
     args = parser.parse_args()
@@ -64,6 +64,7 @@ if __name__ == '__main__':
     sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
 
     session_topology = pd.read_csv(sess_topology_path)
+    rel_path_to_sorting = Path(f'sorting{config["rec_dir_suffix"]}')/f'{config["sorter"]}{config["sorter_dir_suffix"]}'
     for session in sessions:
         mouseID = session.split('_')[0]
         date_str = session.split('_')[1] if len(session.split('_')) == 2 else None
@@ -81,9 +82,9 @@ if __name__ == '__main__':
             extras = ';'.join([str(e) for e in recording_dirs[1:]])
             cmd = script_base.replace('<rec_dir>',str(recording_dirs[0])).replace('<extras>',extras if extras else "na").replace('<sessname>',f'{mouseID}_{date}')
             concat_flag = 'from_concat' if sess_info.shape[0] > 1 else 'si_output'
-            cmd = cmd.replace('<redo_sorting>',str(args.redo_sorting)).replace('<redo_analysis>',str(args.redo_analysis)).replace('<output2use>',concat_flag)
+            cmd = cmd.replace('<redo_sorting>',str(args.redo_sorting)).replace('<redo_analysis>',str(args.redo_postprocessing)).replace('<output2use>',concat_flag)
             print(cmd)
-            subprocess.run(cmd.split()+[f'{args.sess_top_filts}'])
+            subprocess.run(cmd.split()+[f'{args.sess_top_filts}',rel_path_to_sorting])
 
         # date_str = datetime.strptime(session.split('_')[1], '%y%m%d').strftime('%Y-%m-%d')
 

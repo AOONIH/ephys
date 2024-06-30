@@ -16,6 +16,7 @@ from elephant.conversion import BinnedSpikeTrain
 import neo
 from sklearn.model_selection import cross_val_score
 from os import cpu_count
+from itertools import combinations
 from sythesise_spikes import integrated_oscillator, random_projection,generate_spiketrains
 import quantities as pq
 from IPython.display import HTML
@@ -92,7 +93,7 @@ def plot_pca_ts(X_proj_by_event, events, window, plot=None, n_components=3):
             projected_trials = np.array(X_proj_by_event[ei])
             projected_trials_comp = projected_trials[:,comp,:]
             ax.plot(x_ser, projected_trials_comp.mean(axis=0), label=event)
-            # plot_ts_var(x_ser,projected_trials_comp,f'C{ei}',ax)
+            plot_ts_var(x_ser,projected_trials_comp,f'C{ei}',ax)
 
         ax.set_ylabel(f'PC {comp+1}')
         ax.set_xlabel('Time (s)')
@@ -140,12 +141,14 @@ if __name__ == '__main__':
         pathlib.PosixPath = pathlib.WindowsPath
 
     sessions = {}
-    sess_order_dict = {e: ee for e, ee in zip('abc',['pre','main','post'])}
     sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
     session_topology = pd.read_csv(sess_topology_path)
     sessname = 'DO81_240529b' if args.sessname is None else args.sessname
-    name,date,order = sessname.split('_')[0],int(sessname.split('_')[1][:-1]),sess_order_dict[sessname[-1]]
-    sess_info = session_topology.query('name==@name and date==@date and sess_order==@order').iloc[0]
+    name,date,suffix = sessname.split('_')[0],int(sessname.split('_')[1][:-1]),sessname[-1]
+    sessions_on_date = session_topology.query('name==@name and date==@date').reset_index()
+    sess_suffixes = [Path(e).stem[-1]for e in sessions_on_date['sound_bin']]
+    sess_idx = [ei for ei,e in enumerate(sess_suffixes) if e == suffix][0]
+    sess_info = sessions_on_date.loc[sess_idx]
 
     pkldir = ceph_dir / posix_from_win(args.pkldir)
     assert pkldir.is_dir()
@@ -154,7 +157,7 @@ if __name__ == '__main__':
         sessions[sessname]: Session = pickle.load(f)
     # sessions[sessname]: Session = pd.read_pickle(sess_pkls[0])
 
-    window = [-0.25,0.25]
+    window = [0,0.25]
     # window = [0,2]
     for e in list(sessions[sessname].sound_event_dict.keys()):
         sessions[sessname].spike_obj.get_event_spikes(sessions[sessname].sound_event_dict[e].times,e,window,
@@ -162,74 +165,9 @@ if __name__ == '__main__':
 
     # sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir)
 
-    event_psth_dict = {}
-    event_spikes_dict = {}
-    # events = ['X','A','B','C','D','base']
-    events = [f'D-{i}' for i in range(6)]
-    # get event spike trains all trials
-    for event in events:
-        event_spikes = [sessions[sessname].spike_obj.event_cluster_spike_times[e]
-                        for e in sessions[sessname].spike_obj.event_cluster_spike_times.keys()
-                        if event in e]
-        event_spikes_dict[event] = [[SpikeTrain(ee,t_start=window[0],t_stop=window[1],units=s) for ee in e.values()]
-                                    for e in event_spikes]
-
-    # cv_results = cross_val_gpfa(event_spikes_dict['A-3'],x_dims=np.arange(1,30).astype(int))
-    # cv_plot = plt.subplots()
-    # cv_plot[1].plot(np.arange(1,30),cv_results)
-    # cv_plot[1].set_xlabel('latent dimensionality')
-    # cv_plot[1].set_ylabel('log likelihood')
-    # cv_plot[1].set_title('cross validation')
-    # cv_plot[0].show()
-    # results = run_gpfa(event_spikes_dict['A-0'],latent_dimensionality=14)
-    #
-    # fig, ax = plt.subplots()
-    # [ax.plot(e[0],e[1],c='k',lw=2) for e in results[1]]
-    # average_trajectory = np.mean(results[1],axis=0)
-    # ax.plot(average_trajectory[0], average_trajectory[1], c='r', lw=5)
-    # fig.show()
-    # fig,ax = plt.subplots(14,figsize=[10,15])
-    # x_ser = np.linspace(window[0], window[1], average_trajectory.shape[-1])
-    # [ax[i].plot(x_ser,e,c='k',lw=2) for i,e in enumerate(average_trajectory)]
-    # fig.show()
 
 
-    # events = events[1:]
-
-    # set parameters for the integration of the harmonic oscillator
-    timestep = 1 * pq.ms
-    trial_duration = 2 * pq.s
-    num_steps = int((trial_duration.rescale('ms') / timestep).magnitude)
-
-    # set parameters for spike train generation
-    max_rate = 70 * pq.Hz
-    np.random.seed(42)  # for visualization purposes, we want to get identical spike trains at any run
-
-    # specify data size
-    num_trials = 24
-    num_spiketrains = 50
-
-    # generate a low-dimensional trajectory
-    times_oscillator, oscillator_trajectory_2dim = integrated_oscillator(
-        timestep.magnitude, num_steps=num_steps, x0=0, y0=1)
-    times_oscillator = (times_oscillator * timestep.units).rescale('s')
-
-    # random projection to high-dimensional space
-    oscillator_trajectory_Ndim = random_projection(
-        oscillator_trajectory_2dim, embedding_dimension=num_spiketrains)
-
-    # convert to instantaneous rate for Poisson process
-    normed_traj = oscillator_trajectory_Ndim / oscillator_trajectory_Ndim.max()
-    instantaneous_rates_oscillator = np.power(max_rate.magnitude, normed_traj)
-
-    # generate spike trains
-    spiketrains_oscillator = generate_spiketrains(
-        instantaneous_rates_oscillator, num_trials, timestep)
-
-    trial_oscillator = [instantaneous_rate(trial, sampling_period=10*ms,kernel=GaussianKernel(40*ms)).as_array().T
-                        for trial in spiketrains_oscillator]
-
-    all_events = [e for e in sessions[sessname].sound_event_dict.keys() if e[0] in ['A','B','C','D']]
+    all_events = [e for e in sessions[sessname].sound_event_dict.keys() if any(pip in e for pip in ['A','B','C','D'])]
     event_psth_dict = {e: get_predictor_from_psth(sessions[sessname], e, [-2,3], window,mean=None,
                                                   use_unit_zscore=True, use_iti_zscore=False)
                        for e in all_events}
@@ -253,9 +191,9 @@ if __name__ == '__main__':
     n_comp_toplot = 8
     pca_ts_plot = plt.subplots(4,n_comp_toplot,figsize=[100,15],squeeze=False)
     rules = ['ABCD 0','ABBA 0','ABCD 1','ABBA 1','ABCD 2','ABBA 2']
+    pca_scatter_plot = plt.subplots(ncols=3,figsize=[15,5])
     for ii,pip in enumerate(['A','B','C','D']):
-        pca_scatter_plot = plt.subplots(ncols=3,figsize=[15,5])
-        events = [f'{pip}-{i}' for i in range(6)]
+        events = [e for e in all_events if e[0] == pip]
         # for event in events:
         #
         #     event_psth_dict[event] = get_predictor_from_psth(sessions[sessname], event, [-2,3], window,mean=None,
@@ -291,7 +229,7 @@ if __name__ == '__main__':
 
         [[pca_scatter_plot[1][ci].scatter(np.array(proj)[:,comps[0],timepoints[-1]],
                                           np.array(proj)[:,comps[1],timepoints[-1]],
-                                     c=f'C{ti}',label=rules[ti],alpha=0.25,marker='o')
+                                     c=f'C{ii}',label=pip,alpha=0.25,marker='o')
          for ti,proj in enumerate(projected_trials_by_event)] for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
         [(pca_scatter_plot[1][ci].set_xlabel(f'PC{comps[0]}'), pca_scatter_plot[1][ci].set_ylabel(f'PC{comps[1]}'))
          for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
@@ -299,6 +237,7 @@ if __name__ == '__main__':
     # pca_ts_plot[0].set_layout_engine('constrained')
     pca_ts_plot[0].show()
     pca_ts_plot[0].savefig('pca_ts.svg')
+    pca_scatter_plot[1][-1].legend()
     pca_scatter_plot[0].savefig('pca_scatter.svg')
     # pca_scatter_plot[1][-1].legend(ncols=len(rules))
     pca_scatter_plot[0].show()
@@ -334,9 +273,9 @@ if __name__ == '__main__':
 
     # set up a figure with two 3d subplots, so we can have two different views
 
-    for ii,pip in enumerate(['A','B','C','D']):
-        fig,axes = plt.subplots(ncols=2, figsize=[9, 4],subplot_kw={'projection': '3d'})
-        events = [f'{pip}-{i}' for i in range(6)]
+    fig,axes = plt.subplots(ncols=2, figsize=[9, 4],subplot_kw={'projection': '3d'})
+    for ii,pip in enumerate(['A','B','C','D','base']):
+        events = [e for e in event_psth_dict if pip in e]
 
         event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
                         for e in events]
@@ -363,83 +302,133 @@ if __name__ == '__main__':
                 z_prepost = z.copy()
                 z_prepost[stim_mask] = np.nan
 
-                ax.plot(x, y, z_stim, c=f'C{t}')
-                ax.plot(x, y, z_prepost, c=f'C{t}', ls=':')
+                ax.plot(x, y, z_stim, c=f'C{ii}')
+                ax.plot(x, y, z_prepost, c=f'C{ii}', ls=':')
 
                 # plot dots at initial point
-                ax.scatter(x[0], y[0], z[0], c=f'C{t}', s=14)
+                ax.scatter(x[0], y[0], z[0], c=f'C{ii}', s=14,label=pip)
 
                 # make the axes a bit cleaner
                 style_3d_ax(ax)
 
         # specify the orientation of the 3d plot
         axes[0].view_init(elev=22, azim=30)
-        axes[0].set_title(f'{pip} 3D view')
+        # axes[0].set_title(f'{pip} 3D view')
         axes[1].view_init(elev=22, azim=110)
-        plt.tight_layout()
+    axes[-1].legend()
+    plt.tight_layout()
 
-        fig.show()
-
-
-def animate(i):
-    ax.clear()
-    style_3d_ax(ax)
-    ax.view_init(elev=22, azim=30)
-    print(i)
-    for t, t_type in enumerate(projected_trials_by_event):
-        proj_arr = np.array(t_type).mean(axis=0)
-        # for every trial type, select the part of the component
-        # which corresponds to that trial type:
-        x = proj_arr[component_x][0:i]
-        y = proj_arr[component_y][0:i]
-        z = proj_arr[component_z][0:i]
-        print(x.shape)
-        # apply some smoothing to the trajectories
-        # x = gaussian_filter1d(x, sigma=sigma)
-        # y = gaussian_filter1d(y, sigma=sigma)
-        # z = gaussian_filter1d(z, sigma=sigma)
-
-        stim_mask = np.logical_and(x_ser >= 0, x_ser <= 0.25)
-        z_stim = z.copy()
-        # z_stim[~stim_mask] = np.nan
-        # z_prepost = z.copy()
-        # z_prepost[stim_mask] = np.nan
-
-        ax.plot(x, y, z, c=f'C{t}')
-        # ax.plot(x, y, z_prepost, c=f'C{t}', ls=':')
-
-    # ax.set_xlim((-12, 12))
-    # ax.set_ylim((-12, 12))
-    # ax.set_zlim((-13, 13))
-    ax.view_init(elev=22, azim=30)
-
-    return []
+    fig.show()
+    fig.savefig(f'{sessname}_pca_3d.svg')
 
 
-# for ii, pip in enumerate(['A', 'B', 'C', 'D']):
-pip = 'A'
-fig, axes = plt.subplots(ncols=2, figsize=[9, 4], subplot_kw={'projection': '3d'})
-events = [f'{pip}-{i}' for i in range(6)]
+    def animate(i):
+        ax.clear()
+        style_3d_ax(ax)
+        ax.view_init(elev=22, azim=30)
+        print(i)
+        for t, t_type in enumerate(projected_trials_by_event):
+            proj_arr = np.array(t_type).mean(axis=0)
+            # for every trial type, select the part of the component
+            # which corresponds to that trial type:
+            x = proj_arr[component_x][0:i]
+            y = proj_arr[component_y][0:i]
+            z = proj_arr[component_z][0:i]
+            print(x.shape)
+            # apply some smoothing to the trajectories
+            # x = gaussian_filter1d(x, sigma=sigma)
+            # y = gaussian_filter1d(y, sigma=sigma)
+            # z = gaussian_filter1d(z, sigma=sigma)
 
-event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-                for e in events]
-event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
-projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
-                              for trial in trials_by_event] for trials_by_event in event_trials]
+            stim_mask = np.logical_and(x_ser >= 0, x_ser <= 0.25)
+            z_stim = z.copy()
+            # z_stim[~stim_mask] = np.nan
+            # z_prepost = z.copy()
+            # z_prepost[stim_mask] = np.nan
 
-anim = animation.FuncAnimation(fig, animate, frames=x_ser.shape[0], interval=50,blit=True)
-video = anim.to_html5_video()
-html = display.HTML(video)
-display.display(html)
+            ax.plot(x, y, z, c=f'C{t}')
+            # ax.plot(x, y, z_prepost, c=f'C{t}', ls=':')
+
+        # ax.set_xlim((-12, 12))
+        # ax.set_ylim((-12, 12))
+        # ax.set_zlim((-13, 13))
+        ax.view_init(elev=22, azim=30)
+
+        return []
 
 
-for pip in ['A', 'B', 'C', 'D']:
-    compared_pips = compare_pip_sims_2way([event_psth_dict[f'{pip}-0'], event_psth_dict[f'{pip}-1']])
+    # for ii, pip in enumerate(['A', 'B', 'C', 'D']):
+    pip = 'A'
+    fig, axes = plt.subplots(ncols=2, figsize=[9, 4], subplot_kw={'projection': '3d'})
+    events = [e for e in event_psth_dict if e.startswith(pip)]
 
-    compared_pips_plot = plt.subplots()
-    mean_comped_sims = [np.squeeze(pip_sims)[:,0,1] for pip_sims in np.array_split(compared_pips[0], 2)]
-    mean_comped_sims.append(np.squeeze(compared_pips[1][:,0,1]))
-    compared_pips_plot[1].boxplot(mean_comped_sims, labels=[f'{pip}-0 self', f'{pip}-1 self', f'{pip}-0 vs {pip}-1'], )
-    compared_pips_plot[1].set_ylim([0, 1])
-    compared_pips_plot[0].show()
-    compared_pips_plot[0].savefig(f'{pip}_compared_{sessname}.svg')
+    event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
+                    for e in events]
+    event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
+    projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
+                                  for trial in trials_by_event] for trials_by_event in event_trials]
+    #
+    # anim = animation.FuncAnimation(fig, animate, frames=x_ser.shape[0], interval=50,blit=True)
+    # video = anim.to_html5_video()
+    # html = display.HTML(video)
+    # display.display(html)
+
+    # group by rare or freq
+    sessions[sessname].td_df['cum_patts'] = np.cumsum(sessions[sessname].td_df['Tone_Position']==0)
+    rare_filt = 'Tone_Position==0 and local_rate>=0.8'
+    freq_filt = 'Tone_Position==0 and local_rate<=0.1'
+
+    patt_trial_idxs = sessions[sessname].sound_event_dict['A-0'].trial_nums-1
+
+    by_cond_trial_nums = [sessions[sessname].td_df.query(cond_filt).index.values
+                           for cond_filt in [rare_filt, freq_filt]]
+    by_cond_trial_idxs = [[np.argwhere(idx == patt_trial_idxs)[0] for idx in cond_idxs if idx in patt_trial_idxs]
+                          for cond_idxs in by_cond_trial_nums]
+    by_cond_trial_idxs = [np.hstack(e) for e in by_cond_trial_idxs]
+    def plot_2d_pca_traj(trajectories,pc_idxs,mean_axis=None, plot=None,subset=None,plt_kwargs=None):
+
+        if plot:
+            fig: plt.Figure = plot[0]
+            ax:plt.Axes = plot[1]
+            assert not isinstance(ax,np.ndarray), 'ax must be a single axis'
+        else:
+            plot = plt.subplots()
+            fig: plt.Figure = plot[0]
+            ax: plt.Axes = plot[1]
+
+        by_pc_traj = [trajectories[idx] for idx in pc_idxs]
+        if subset is not None:
+            by_pc_traj = [traj[subset] for traj in by_pc_traj]
+
+        if mean_axis is not None:
+            by_pc_traj = [traj.mean(axis=mean_axis) for traj in by_pc_traj]
+        ax.plot(by_pc_traj[0],by_pc_traj[1], **plt_kwargs)
+        if mean_axis is not None:
+            ax.scatter(by_pc_traj[0][0],by_pc_traj[1][0],c=plt_kwargs.get('c','k'))
+        ax.set_xlabel(f'PC {pc_idxs[0]}')
+        ax.set_ylabel(f'PC {pc_idxs[1]}')
+        return fig,ax
+
+    by_cond_ls = ['-','--']
+    cond_lbls = ['rare', 'freq']
+    pc_combs = list(combinations(range(3), 2))
+    pca_traj_plot = plt.subplots(ncols=len(pc_combs), figsize=[9, 4], sharey=True)
+    for pi, pip in enumerate('A'):
+        events = [e for e in event_psth_dict if pip in e]
+
+        event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
+                        for e in events]
+        event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
+
+        projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
+                                      for trial in trials_by_event] for trials_by_event in event_trials]
+        trajs2plot = np.transpose(np.array(projected_trials_by_event[0]),(1,0,2))
+        [[[plot_2d_pca_traj(trajs2plot,pc_comb,mean_axis=mean_type,subset=cond_subset-1,
+                           plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label':lbl},
+                          plot=(pca_traj_plot[0],pca_traj_plot[1][comb_i]))
+         for comb_i,pc_comb in enumerate(pc_combs)]
+         for cond_subset,cond_ls,lbl in zip(by_cond_trial_idxs,by_cond_ls,cond_lbls)]
+         for mean_type, mean_lw in zip([0],[2,0.1])]
+    pca_traj_plot[1][-1].legend()
+    pca_traj_plot[0].show()
+    pca_traj_plot[0].savefig(f'{sessname}_pca_trajs.svg')

@@ -77,7 +77,7 @@ def compute_self_similarity(pop_rate_mat:np.ndarray, cv_folds=5):
 
 
 def compare_pip_sims_2way(pop_rate_mats: [np.ndarray,np.ndarray],n_shuffles=1000):
-    assert len(pop_rate_mats) == 2
+    # assert len(pop_rate_mats) == 2
     self_sims_by_halves = [[[cosine_similarity([np.squeeze(e).mean(axis=0)[:,-1] for e in np.array_split(rate_mat[shuffle],2)])]
                             for shuffle in tqdm([np.random.permutation(rate_mat.shape[0])
                                                  for _ in range(n_shuffles)], desc='shuffle self sims', total= n_shuffles)
@@ -90,6 +90,8 @@ def compare_pip_sims_2way(pop_rate_mats: [np.ndarray,np.ndarray],n_shuffles=1000
     # [print([np.array_split(e[idx],2)[0].mean(axis=0)[:,-1].shape
     #                     for e, idx in zip(pop_rate_mats, idxs)])
     #  for idxs in tqdm(shuffled_idxs, desc='shuffle across sims', total=n_shuffles)]
+    if len(pop_rate_mats) == 1:
+        return self_sims_by_halves, None
     across_sims_by_halves = [cosine_similarity([np.squeeze(e)[idx[::2]].mean(axis=0)[:,-1]
                                                 for e, idx in zip(pop_rate_mats, idxs) ])
                              for idxs in tqdm(shuffled_idxs, desc='shuffle across sims', total=n_shuffles)]

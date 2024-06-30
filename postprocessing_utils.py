@@ -110,6 +110,7 @@ def postprocess(recording, sorting, sort_dir:Path):
     _ = compute_unit_locations(waveform_extractor=we)
     _ = compute_quality_metrics(waveform_extractor=we, metric_names=['snr', 'isi_violation', 'presence_ratio'])
     _ = compute_template_similarity(we)
+    print(f'Exporting report for {sort_dir.parent}')
     export_report(waveform_extractor=we, output_folder=sort_dir.parent / 'si_report', remove_if_exists=True,
                   format='svg',
                   n_jobs=os.cpu_count() - 1)

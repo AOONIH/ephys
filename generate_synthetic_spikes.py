@@ -4,7 +4,6 @@ from quantities import s, Hz, ms
 from matplotlib import pyplot as plt
 import matplotlib
 from scipy.signal.windows import gaussian
-matplotlib.use('Tkagg')
 
 
 def inhomogeneous_poisson(rate, bin_size,start_time=0):
@@ -42,22 +41,45 @@ def gen_rate_ts(x_ser,event_t, event_dur):
 
     return response+0.1
 
-def gen_responses(unit_rates,n_trials,x_ser,unit_time_offsets=None,trial_var=None):
 
-    if unit_time_offsets == None:
+def gen_responses(unit_rates, n_trials, x_ser, unit_time_offsets=None, trial_var=None):
+
+    if unit_time_offsets is None:
         unit_time_offsets = np.zeros_like(unit_rates)
 
     if trial_var is None:
         trial_var = np.zeros(n_trials)
     event_dur = x_ser[-1]-x_ser[0]
     bin_size = np.diff(x_ser).mean()
+    # print(f'{n_trials,len(unit_rates) =}')
+    # return None
     single_trial_all_units = [gen_rate_ts(x_ser,offset,0.25)*unit_rate for unit_rate,offset in zip(unit_rates, unit_time_offsets)]
 
-    all_trial_responses = [[unit*np.random.normal(loc=1,size=len(unit),scale=t_var)  for unit in single_trial_all_units]
-                          for ti,t_var in enumerate(trial_var)]
+    all_trial_responses = [[unit*np.random.normal(loc=1,size=len(unit),scale=t_var) for unit in single_trial_all_units]
+                           for ti,t_var in enumerate(trial_var)]
     all_trial_spikes = [[next(inhomogeneous_poisson_generator(1,unit,bin_size,start_time=x_ser[0])) for unit in trial]
                         for trial in all_trial_responses]
     return all_trial_spikes
+
+
+def gen_patterned_unit_rates(n_units, n_types, group_noise,max_rate=20):
+    template = np.random.rand(n_units)*1000
+    group_unit_rates = [template+np.random.rand(n_units)*group_noise for _ in range(n_types)]
+    u_min, u_max = np.min(group_unit_rates), np.max(group_unit_rates)
+    normalized_rates = [((rates-u_min)/(u_max-u_min))*max_rate
+                        for rates in group_unit_rates]
+    print(f'{u_min,u_max = }')
+    return normalized_rates
+
+
+def gen_patterned_time_offsets(n_units, n_types, group_noise,max_offset=0.2):
+    template = np.random.rand(n_units)*1000
+    group_unit_rates = [template+np.random.rand(n_units)*group_noise for _ in range(n_types)]
+    u_min, u_max = np.min(group_unit_rates), np.max(group_unit_rates)
+    normalized_rates = [((rates-u_min)/(u_max-u_min))*max_offset
+                        for rates in group_unit_rates]
+    print(f'{u_min,u_max = }')
+    return normalized_rates
 
 
 if __name__ == '__main__':

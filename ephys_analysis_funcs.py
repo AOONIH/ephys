@@ -23,7 +23,7 @@ from elephant.statistics import instantaneous_rate
 from quantities import s, ms
 from neo import SpikeTrain
 from elephant.kernels import GaussianKernel
-from generate_synthetic_spikes import gen_responses
+from generate_synthetic_spikes import gen_responses,gen_patterned_unit_rates, gen_patterned_time_offsets
 
 # import seaborn as sns
 # from os import register_at_fork
@@ -476,8 +476,14 @@ class SessionSpikes:
         self.bad_units = set()
         # self.curate_units()
         # self.curate_units_by_rate()
+        self.good_units = None
         if (parent_dir / 'good_units.csv').is_file():
             self.good_units = pd.read_csv(parent_dir / 'good_units.csv').iloc[:, 0].to_list()
+        elif (parent_dir.parent / 'good_units.csv').is_file():
+            self.good_units = pd.read_csv(parent_dir.parent / 'good_units.csv').iloc[:, 0].to_list()
+        else:
+            self.good_units= None
+        if self.good_units is not None:
             unit_ids = list(self.cluster_spike_times_dict.keys())
             for unit in unit_ids:
                 if unit not in self.good_units:
@@ -494,19 +500,19 @@ class SessionSpikes:
                          window: [list | np.ndarray], get_spike_matrix=True):
         if self.event_cluster_spike_times is None:
             self.event_cluster_spike_times = multiprocessing.Manager().dict()
-            for event_time in event_times:
-                if f'{event_name}_{event_time}' not in list(self.event_cluster_spike_times.keys()):
-                    self.event_cluster_spike_times[f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,
-                                                                                                             self.cluster_spike_times_dict,
-                                                                                                             window,
-                                                                                                             self.new_fs)
-                if get_spike_matrix:
-                    if self.event_spike_matrices is None:
-                        self.event_spike_matrices = multiprocessing.Manager().dict()
-                    if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
-                        self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(
-                            self.event_cluster_spike_times[f'{event_name}_{event_time}'],
-                            window, self.new_fs)
+        for event_time in event_times:
+            if f'{event_name}_{event_time}' not in list(self.event_cluster_spike_times.keys()):
+                self.event_cluster_spike_times[f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,
+                                                                                                         self.cluster_spike_times_dict,
+                                                                                                         window,
+                                                                                                         self.new_fs)
+            if get_spike_matrix:
+                if self.event_spike_matrices is None:
+                    self.event_spike_matrices = multiprocessing.Manager().dict()
+                if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
+                    self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(
+                        self.event_cluster_spike_times[f'{event_name}_{event_time}'],
+                        window, self.new_fs)
 
 
     def curate_units(self):
@@ -590,8 +596,7 @@ def plot_decoder_accuracy(decoder_accuracy, labels, fig=None, ax=None, start_loc
 
 def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Series, np.ndarray, list],
                    window: [float, float], event_lbl: str, baseline_dur=0.25, zscore_flag=False, iti_zscore=None,
-                   gaus_std=0.04, synth_data=None) -> (
-        np.ndarray, pd.DataFrame):
+                   gaus_std=0.04, synth_data=None, synth_params=None) -> (np.ndarray, pd.DataFrame):
     if iti_zscore:
         zscore_flag = False
 
@@ -602,8 +607,14 @@ def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Se
     if synth_data is None:
         all_event_list = [sess_spike_obj.event_spike_matrices[key]for key in event_keys]
     else:
-        unit_rates = np.random.rand(len(sess_spike_obj.clusters) * 40)
-        synth_times = gen_responses(unit_rates, len(event_times), np.arange(window[0],window[1],0.002))
+        if synth_params is None:
+            unit_rates = np.random.rand(len(sess_spike_obj.units))*40
+            unit_time_offsets = np.random.rand(len(sess_spike_obj.units))*0.1
+        else:
+            unit_rates = synth_params['unit_rates']
+            unit_time_offsets = synth_params['unit_time_offsets'] if synth_params else None
+        synth_times = gen_responses(unit_rates, len(event_times), np.arange(window[0],window[1],0.002),
+                                    unit_time_offsets=unit_time_offsets)
         spike_trains = [[SpikeTrain(ee, t_start=window[0], t_stop=window[1]*s+0.11*s, units=s) for ee in e] for e in synth_times]
         all_event_list = np.array([instantaneous_rate(st, 100 * ms, kernel=GaussianKernel(40*ms)).T for st in spike_trains])
 
@@ -618,7 +629,7 @@ def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Se
     ratemat_arr3d = np.array(all_event_list) if isinstance(all_event_list, list) else all_event_list
     x_ser = np.linspace(window[0], window[1], ratemat_arr3d.shape[-1])
     rate_mat = pd.DataFrame(ratemat_arr3d.mean(axis=0),
-                            columns=x_ser)
+                            columns=pd.to_timedelta(x_ser,'s'))
     rate_mat.index = sess_spike_obj.units
     # rate_mat = rate_mat.assign(m=rate_mat.loc[:,timedelta(0,0):timedelta(0,0.2)].mean(axis=1)
     #                            ).sort_values('m',ascending=False).drop('m', axis=1)
@@ -629,7 +640,7 @@ def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Se
     return ratemat_arr3d, rate_mat, rate_mat.index
 
 
-def plot_psth(psth_rate_mat, event_lbl, window, title='', cbar_label=None, cmap='hot', **im_kwargs):
+def plot_psth(psth_rate_mat, event_lbl, window, title='', cbar_label=None, cmap='Reds', **im_kwargs):
     if not cbar_label:
         cbar_label = 'firing rate (Hz)'
     fig, ax, cbar = plot_2d_array_with_subplots(psth_rate_mat, cmap=cmap,
@@ -711,6 +722,7 @@ class SoundEvent:
 
         self.psth = None
         self.psth_plot = None
+        self.synth_params = None
 
     def get_psth(self, sess_spike_obj: SessionSpikes, window, title='', redo_psth=False, redo_psth_plot=False,
                  baseline_dur=0.25, zscore_flag=False, iti_zscore=None, reorder_idxs=None,synth_data=None):
@@ -718,7 +730,7 @@ class SoundEvent:
         if not self.psth or redo_psth:
             self.psth = get_event_psth(sess_spike_obj, self.idx, self.times, window, self.lbl,
                                        baseline_dur=baseline_dur, zscore_flag=zscore_flag, iti_zscore=None,
-                                       synth_data=synth_data)
+                                       synth_data=synth_data, synth_params=self.synth_params if synth_data else None,)
             if iti_zscore:
                 self.psth = (self.psth[0],zscore_by_unit(self.psth[1],unit_means=iti_zscore[0],unit_stds=iti_zscore[1]),
                              self.psth[2])
@@ -825,7 +837,7 @@ class Decoder:
                                                        start_loc=start_loc, n_features=len(labels))
             self.accuracy_plot[1].legend(ncols=len(labels))
 
-        self.accuracy_plot[0].show()
+        # self.accuracy_plot[0].show()
 
     def plot_confusion_matrix(self, labels, **kwargs):
         y_tests = np.hstack([np.hstack(ee) for ee in [e[0] for e in self.predictions]])
@@ -1127,6 +1139,17 @@ class Session:
         print('new means')
         print(self.spike_obj.unit_means)
 
+    def get_grouped_rates_by_property(self, pip_desc, pip_prop, group_noise):
+        groups = np.unique([e[pip_prop] for e in pip_desc.values()])
+        print(groups)
+        assert group_noise
+        for group in groups:
+            group_pips = [k for k, v in pip_desc.items() if v[pip_prop] == group]
+            unit_rates = gen_patterned_unit_rates(len(self.spike_obj.cluster_spike_times_dict), len(group_pips), group_noise)
+            unit_times_offsets = gen_patterned_time_offsets(len(self.spike_obj.cluster_spike_times_dict), len(group_pips),0.1)
+            for k, v,t in zip(group_pips, unit_rates, unit_times_offsets):
+                self.sound_event_dict[k].synth_params = {'unit_rates': v, 'unit_time_offsets': t}
+
     def get_sound_psth(self, psth_window, baseline_dur=0.25, zscore_flag=False, redo_psth=False, to_exclude=(None,),
                        use_iti_zscore=True, **psth_kwargs):
         """
@@ -1296,7 +1319,7 @@ def get_predictor_from_psth(sess_obj: Session, event_key, psth_window, new_windo
     if use_iti_zscore:
         predictor = zscore_by_unit(predictor, sess_obj.iti_zscore[0], sess_obj.iti_zscore[1])
     if use_unit_zscore:
-        predictor = zscore_by_unit(predictor, sess_obj.spike_obj.unit_means[0], sess_obj.spike_obj.unit_means[0])
+        predictor = zscore_by_unit(predictor, sess_obj.spike_obj.unit_means[0], sess_obj.spike_obj.unit_means[1])
     if mean:
         predictor = mean(predictor, axis=mean_axis)
 

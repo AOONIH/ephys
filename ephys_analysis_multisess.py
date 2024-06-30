@@ -16,20 +16,23 @@ import pandas as pd
 
 
 if __name__ == "__main__":
+    print('args')
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file')
     parser.add_argument('sess_date')
     parser.add_argument('--sorter_dirname',default='from_concat',required=False)
     parser.add_argument('--sess_top_filts', default='')
+    parser.add_argument('--synth_data',default=0,type=int)
+    parser.add_argument('--rel_sorting_path',default='')
 
     args = parser.parse_args()
+    print(f'{args = }')
     with open(args.config_file, 'r') as file:
         config = yaml.safe_load(file)
     sys_os = platform.system().lower()
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
 
     plt.ioff()
-
     # try: gen_metadata(ceph_dir/posix_from_win(r'X:\Dammy\ephys\session_topology.csv'),ceph_dir,ceph_dir/'Dammy'/'harpbins')
     sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
     # try: gen_metadata(sess_topology_path,ceph_dir,
@@ -45,20 +48,26 @@ if __name__ == "__main__":
     if args.sess_top_filts:
         all_sess_info = all_sess_info.query(args.sess_top_filts)
 
-    dir1_name, dir2_name = 'sorting_no_si_drift', 'kilosort2_5_ks_drift'
+    if args.rel_sorting_path:
+        dir1_name, dir2_name = Path(args.rel_sorting_path).parts
+    else:
+        dir1_name, dir2_name = 'sorting_no_si_drift', 'kilosort2_5_ks_drift'
+
     ephys_dir = ceph_dir / 'Dammy' / 'ephys'
     date_str = datetime.strptime(str(date), '%y%m%d').strftime('%Y-%m-%d')
     print(f'{name}_{date_str}')
 
-    if all_sess_info.shape[0] == 1:
-        sorter_dirname = 'sorter_output'
-    else:
-        sorter_dirname = args.sorter_dirname
-    sorter_dirname = 'si_output'
+    # if all_sess_info.shape[0] == 1:
+    #     sorter_dirname = 'sorter_output'
+    # else:
+    sorter_dirname = args.sorter_dirname
     sort_dirs = get_sorting_dirs(ephys_dir, f'{name}_{date_str}',dir1_name, dir2_name, sorter_dirname)
     sort_dirs = [e for ei,e in enumerate(sort_dirs) if ei in all_sess_info.index]
 
-    ephys_figdir = ceph_dir/'Dammy'/'figures'/'synth_data'
+    ephys_figdir = ceph_dir/'Dammy'/'figures'/f'rerun_w_good_units{dir1_name}_{dir2_name}'
+    if args.synth_data:
+        if 'synth' not in ephys_figdir.stem:
+            ephys_figdir = ephys_figdir.with_stem(f'{ephys_figdir.stem}_synth_data')
     if not ephys_figdir.is_dir():
         ephys_figdir.mkdir()
 
@@ -87,6 +96,8 @@ if __name__ == "__main__":
     for (_,sess_info),spike_dir in zip(all_sess_info.iterrows(), sort_dirs):
         if sess_info['sess_order'] != 'main':
             continue
+        # if 'good_units' not in spike_dir.parent.name:
+        #     pass
 
         recording_dir = next((ceph_dir/posix_from_win(sess_info['ephys_dir'],config['ceph_dir_linux'])).rglob('continuous')).parent
         # print((ceph_dir/posix_from_win(sess_info['ephys_dir'])))
@@ -125,8 +136,8 @@ if __name__ == "__main__":
             # normal = [int(pip) for pip in main_pattern.split(';')]
             normal= main_pattern
             new_normal = None
+        sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir)
         if not sessions[sessname].sound_event_dict:
-            sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir)
             _parts = sessname.split('_')
             '_'.join([_parts[0],'SoundData',_parts[1]])
             labels = ['A-0', 'B-0', 'C-0', 'D-0', 'X', 'base','newA']
@@ -135,9 +146,21 @@ if __name__ == "__main__":
             sessions[sessname].init_sound_event_dict(ceph_dir/posix_from_win(abs_writes_path).with_suffix('.csv'),
                                                      patterns=main_patterns)
             sessions[sessname].get_event_free_zscore()
+            synth_data_flag = args.synth_data if args.synth_data else None
+            n_units = len(sessions[sessname].spike_obj.units)
+            if synth_data_flag:
+                sessions[sessname].spike_obj.unit_means = (np.zeros(n_units), np.ones(n_units))
 
-            sessions[sessname].get_sound_psth(psth_window=psth_window,zscore_flag=True,baseline_dur=0,redo_psth=True,
-                                              use_iti_zscore=False,synth_data=True)
+            pip_idxs = {event_lbl: sessions[sessname].sound_event_dict[event_lbl].idx
+                        for event_lbl in sessions[sessname].sound_event_dict
+                        if any(char in event_lbl for char in 'ABCD')}
+            pip_desc, pip_lbls, pip_names = get_pip_info(sessions[sessname].sound_event_dict, normal_patterns,
+                                                         n_patts_per_rule)
+            # generate patterned unit rates
+            sessions[sessname].get_grouped_rates_by_property(pip_desc,'ptype',0.1)
+
+            sessions[sessname].get_sound_psth(psth_window=psth_window, zscore_flag=True, baseline_dur=0, redo_psth=True,
+                                              use_iti_zscore=False, synth_data=synth_data_flag)
 
             n_shuffles = 1000
             by_pip_predictors = {}
@@ -175,12 +198,14 @@ if __name__ == "__main__":
 
             compared_pips_plot = plt.subplots(4,figsize=(6, 18))
             for pi,pip in enumerate(['A', 'B', 'C', 'D']):
-                compared_pips = compare_pip_sims_2way([event_psth_dict[f'{pip}-0'], event_psth_dict[f'{pip}-1']])
+                event_names = [p for p in event_psth_dict if pip in p]
+                compared_pips = compare_pip_sims_2way([event_psth_dict[e] for e in event_names])
 
-                mean_comped_sims = [np.squeeze(pip_sims)[:, 0, 1] for pip_sims in np.array_split(compared_pips[0], 2)]
-                mean_comped_sims.append(np.squeeze(compared_pips[1][:, 0, 1]))
+                mean_comped_sims = [np.squeeze(pip_sims)[:, 0, 1] for pip_sims in np.array_split(compared_pips[0], (len(event_names)))]
+                mean_comped_sims.append(np.squeeze(compared_pips[1][:, 0, 1])) if len(event_names) > 1 else None
                 compared_pips_plot[1][pi].boxplot(mean_comped_sims,
-                                              labels=[f'{pip}-0 self', f'{pip}-1 self', f'{pip}-0 vs {pip}-1'], )
+                                                  labels=(event_names+['vs '.join(event_names)] if len(event_names) > 1
+                                                          else event_names))
                 compared_pips_plot[1][pi].set_ylim([0, 1])
                 compared_pips_plot[1][pi].set_ylabel('cosine similarity')
             compared_pips_plot[0].show()
@@ -243,7 +268,7 @@ if __name__ == "__main__":
                         psth_XA_plot[1][ei].tick_params(axis='both', which='major', labelsize=18)
                         psth_XA_plot[1][ei].locator_params(axis='both', nbins=3)
                     psth_XA_plot[0].tight_layout(pad=0)
-                    psth_XA_plot[0].show()
+                    # psth_XA_plot[0].show()
 
                 if sess_info['sess_order'] != 'main':
                     psth_ABCD_plot = plt.subplots(ncols=4,figsize=(9,3.5),sharey='all')
@@ -276,7 +301,7 @@ if __name__ == "__main__":
                     sessions[sessname].init_decoder('X_to_base', np.vstack(_predictor_list), np.hstack(_feature_list))
                     sessions[sessname].run_decoder('X_to_base', ['data','shuffle'], dec_kwargs={'cv_folds':0},
                                                    plot_flag=True)
-                    sessions[sessname].decoders['X_to_base'].accuracy_plot[0].show()
+                    # sessions[sessname].decoders['X_to_base'].accuracy_plot[0].show()
                     sessions[sessname].decoders['X_to_base'].accuracy_plot[0].savefig(ephys_figdir/f'X_to_base_{sessname}.svg')
                 # decoder to base
                 dec_kwargs = {'cv_folds': 10}
@@ -310,7 +335,7 @@ if __name__ == "__main__":
                 # tone2base_all_plot[1].set_xticks(np.arange(len('ABCD')+1))
                 # tone2base_all_plot[1].set_xticklabels(list('ABCD')+['A_shuffle'])
                 tone2base_all_plot[1].get_legend().remove()
-                tone2base_all_plot[0].show()
+                # tone2base_all_plot[0].show()
                 tone2base_all_plot[0].set_constrained_layout('constrained')
                 tone2base_all_plot[0].savefig(ephys_figdir/f'ABCD_to_base_perf_{sessname}.svg')
 
@@ -397,7 +422,7 @@ if __name__ == "__main__":
 
                 rec_dist_decoder_plot = plt.subplots()
                 # dec_events = ['A-0','B-0','C-0','D-0','A_shuffle','A_halves']
-                dec_events = ['A-0','A-0_shuffle']
+                dec_events = ['A-0','X','A-0_shuffle']
                 for pi,pip in enumerate(dec_events):
                     pip_id = pip.split('_')[0]
 
@@ -446,11 +471,11 @@ if __name__ == "__main__":
 
                 # do as boxplot
                 rare_freq_boxplot = plt.subplots()
-                perfs = [np.array(sessions[sessname].decoders[f'rec_dist_{pip}'].accuracy) for pip in dec_events[:-1]]
+                perfs = [np.array(sessions[sessname].decoders[f'rec_dist_{pip}'].accuracy) for pip in dec_events]
                 # [rare_freq_boxplot[1].boxplot(perf,pi) for pi, perf in enumerate(perfs)]
-                rare_freq_boxplot[1].boxplot(perfs,bootstrap=100000,labels=dec_events[:-2]+['shuffle'],)
-                rare_freq_boxplot[1].set_ylim(0.25,0.8)
-                rare_freq_boxplot[1].set_yticks([0,.25,0.5,0.75])
+                rare_freq_boxplot[1].boxplot(perfs,bootstrap=100000,labels=dec_events,)
+                rare_freq_boxplot[1].set_ylim(0.25,0.85)
+                rare_freq_boxplot[1].set_yticks([0,.25,0.5,1.05])
                 rare_freq_boxplot[1].axhline(0.5,c='k',ls='--')
                 rare_freq_boxplot[1].set_yticklabels([0,.25,0.5,0.75])
                 # rare_freq_boxplot[1].set_xticks(np.arange(len(dec_events[:-1]))+1)
@@ -586,11 +611,7 @@ if __name__ == "__main__":
                                                            mean=None,)
                               for event_lbl in sessions[sessname].sound_event_dict
                               if any(char in event_lbl for char in 'ABCD')}
-            pip_idxs = {event_lbl: sessions[sessname].sound_event_dict[event_lbl].idx
-                        for event_lbl in sessions[sessname].sound_event_dict
-                        if any(char in event_lbl for char in 'ABCD')}
-            pip_desc,pip_lbls,pip_names = get_pip_info(sessions[sessname].sound_event_dict,normal_patterns,
-                                                       n_patts_per_rule)
+
             similarity = cosine_similarity([pred[:,:,-1].mean(axis=0) for pred in pip_predictors.values()])
 
             sort_keys = ['name','group',]
@@ -704,7 +725,7 @@ if __name__ == "__main__":
             pip_by_pip_sim_plot[0].set_size_inches(20,5*pip_by_pip_sim_plot[1].shape[0])
             pip_by_pip_sim_plot[0].set_layout_engine('tight')
             pip_by_pip_sim_plot[0].show()
-            sim_figdir = ephys_figdir.parent/'by_pip_similarity_by_rule_synth'
+            sim_figdir = ephys_figdir.with_stem(f'{ephys_figdir.stem}_by_pip_sim_plots')
             if not sim_figdir.is_dir():
                 sim_figdir.mkdir()
             pip_by_pip_sim_plot[0].savefig( sim_figdir/ f'by_pip_similarity_{sessname}{"_permute" if permute else ""}_reordered.svg')
