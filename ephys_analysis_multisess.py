@@ -195,7 +195,6 @@ if __name__ == "__main__":
             # event_psth_dict = {e: by_pip_predictors[e] for e in sum(list([e.valuesby_pip_predictors.values()]), [])}
             event_psth_dict = {k:v for e_key in by_pip_predictors for (k, v) in by_pip_predictors[e_key].items()}
 
-
             compared_pips_plot = plt.subplots(4,figsize=(6, 18))
             for pi,pip in enumerate(['A', 'B', 'C', 'D']):
                 event_names = [p for p in event_psth_dict if pip in p]
@@ -210,7 +209,6 @@ if __name__ == "__main__":
                 compared_pips_plot[1][pi].set_ylabel('cosine similarity')
             compared_pips_plot[0].show()
             compared_pips_plot[0].savefig(ephys_figdir/f'pips_compared_{sessname}.svg')
-
 
             # save_session psth
             if plot_psth_decode:
@@ -554,22 +552,24 @@ if __name__ == "__main__":
         if sess_info['sess_order'] == 'main' and 4 in sessions[sessname].td_df['Stage'].values:
             new_window = [-1, 2]
             pip_predictor = get_predictor_from_psth(sessions[sessname], 'A-0', psth_window, new_window, mean=None)
+            normal_responses = get_predictor_from_psth(sessions[sessname], 'A-0', psth_window, new_window, mean=None)
+            deviant_responses = get_predictor_from_psth(sessions[sessname], 'A-1', psth_window, new_window, mean=None)
 
             # new_norm_predictors =
             x_ser = np.linspace(new_window[0],new_window[1],pip_predictor.shape[-1])
-            norm_trial_nums = sessions[sessname].td_df.query('(Pattern_Type == 0) & Tone_Position == 0 & '
-                                                             'local_rate == 0.0 & Session_Block == 3 & N_TonesPlayed == 4').index.to_numpy()
-            dev_trial_nums = sessions[sessname].td_df.query('(Pattern_Type == 1) & Tone_Position == 0').index.to_numpy()
-            newnorm_trial_nums = sessions[sessname].td_df.query('(Pattern_Type == -1) & Tone_Position == 0').index.to_numpy()
+            # norm_trial_nums = sessions[sessname].td_df.query('(Pattern_Type == 0) & Tone_Position == 0 & '
+            #                                                  'local_rate == 0.0 & Session_Block == 3 & N_TonesPlayed == 4').index.to_numpy()
+            # dev_trial_nums = sessions[sessname].td_df.query('(Pattern_Type == 1) & Tone_Position == 0').index.to_numpy()
+            # newnorm_trial_nums = sessions[sessname].td_df.query('(Pattern_Type == -1) & Tone_Position == 0').index.to_numpy()
             predictors_dict = {}
             features_dict = {}
             pred_names = ['normal','deviant','new_norm']
             colors = ['saddlebrown','chocolate','darkslategreen']
             psth_ts_plot=plt.subplots()
-            for di, (name, trial_nums, color) in enumerate(zip(pred_names[:-1],[norm_trial_nums,dev_trial_nums,newnorm_trial_nums],colors)):
-                idx_bool = np.isin(sessions[sessname].sound_event_dict['A-0'].trial_nums - 1,
-                                   trial_nums)
-                predictors_dict[name] = pip_predictor[idx_bool]
+            for di, (name, responses, color) in enumerate(zip(pred_names[:-1],[normal_responses,deviant_responses],colors)):
+                # idx_bool = np.isin(sessions[sessname].sound_event_dict['A-0'].trial_nums - 1,
+                #                    trial_nums)
+                predictors_dict[name] = responses
                 features_dict[name] = np.full(predictors_dict[name].shape[0],di)
                 if di<2:
                     smoothed_data = savgol_filter(predictors_dict[name].mean(axis=0),10,2,axis=1)
@@ -585,23 +585,23 @@ if __name__ == "__main__":
             psth_ts_plot[0].set_size_inches(3.5,3)
             psth_ts_plot[0].savefig(ephys_figdir/f'norm_dev_psth_ts_{sessname}.svg')
 
-            new_norm_pred = get_predictor_from_psth(sessions[sessname], 'A2', psth_window, new_window, mean=None)
-            predictors_dict['new_norm'] = new_norm_pred
-            features_dict['new_norm'] = np.full_like(new_norm_pred.shape[0],2)
-
-            for dev_type in ['deviant','new_norm']:
-                norm_dec_diff_mat = plot_psth(predictors_dict[dev_type].mean(axis=0)-predictors_dict['normal'].mean(axis=0),
-                                              'Pattern',new_window,cmap='bwr')
-                norm_dec_diff_mat[1].axvline(0.5,c='w',ls='--')
-                norm_dec_diff_mat[0].show()
-
-                all_dev_plot = plt.subplots(4,5,figsize=(30,20))
-                for i, (trial_response,ax) in enumerate(zip(predictors_dict[dev_type],all_dev_plot[1].flatten())):
-                    norm_dec_diff_mat = plot_psth(trial_response - predictors_dict['normal'].mean(axis=0),
-                                                  'Pattern', new_window, cmap='bwr',plot=(all_dev_plot[0],ax),
-                                                  vmin=-10,vmax=30)
-                    ax.axvline(0.5, c='w', ls='--')
-                all_dev_plot[0].show()
+            # new_norm_pred = get_predictor_from_psth(sessions[sessname], 'A2', psth_window, new_window, mean=None)
+            # predictors_dict['new_norm'] = new_norm_pred
+            # features_dict['new_norm'] = np.full_like(new_norm_pred.shape[0],2)
+            #
+            # for dev_type in ['deviant','new_norm']:
+            #     norm_dec_diff_mat = plot_psth(predictors_dict[dev_type].mean(axis=0)-predictors_dict['normal'].mean(axis=0),
+            #                                   'Pattern',new_window,cmap='bwr')
+            #     norm_dec_diff_mat[1].axvline(0.5,c='w',ls='--')
+            #     norm_dec_diff_mat[0].show()
+            #
+            #     all_dev_plot = plt.subplots(4,5,figsize=(30,20))
+            #     for i, (trial_response,ax) in enumerate(zip(predictors_dict[dev_type],all_dev_plot[1].flatten())):
+            #         norm_dec_diff_mat = plot_psth(trial_response - predictors_dict['normal'].mean(axis=0),
+            #                                       'Pattern', new_window, cmap='bwr',plot=(all_dev_plot[0],ax),
+            #                                       vmin=-10,vmax=30)
+            #         ax.axvline(0.5, c='w', ls='--')
+            #     all_dev_plot[0].show()
 
         # stage5 analysis on representation of rising vs non-rising tones
         if sess_info['sess_order'] == 'main' and 5 in sessions[sessname].td_df['Stage'].values:

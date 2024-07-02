@@ -7,6 +7,7 @@ from ephys_analysis_funcs import *
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy.ndimage import gaussian_filter1d
+from scipy.spatial.distance import euclidean
 from scipy.stats import bootstrap
 import argparse
 import yaml
@@ -30,6 +31,17 @@ def get_event_response(event_response_dict, events):
     event_responses = [[np.squeeze(ee) for ee in e] for e in event_responses]
 
     return event_responses
+
+def format_tractories(trajectories, pc_idxs, subset=None, mean_axis=None):
+    trajectories = np.transpose(np.array(trajectories), (1, 0, 2))
+    by_pc_traj = [trajectories[idx] for idx in pc_idxs]
+    if subset is not None:
+        by_pc_traj = [traj[subset] for traj in by_pc_traj]
+
+    if mean_axis is not None:
+        by_pc_traj = [traj.mean(axis=mean_axis) for traj in by_pc_traj]
+
+    return by_pc_traj
 
 def get_population_pca(rate_arr:np.ndarray):
 
@@ -141,24 +153,18 @@ def plot_pca_traj(trajectories, pc_idxs, mean_axis=None, plot=None, subset=None,
         plot = plt.subplots()
         fig: plt.Figure = plot[0]
         ax: plt.Axes = plot[1]
-
-    by_pc_traj = [trajectories[idx] for idx in pc_idxs]
-    if subset is not None:
-        by_pc_traj = [traj[subset] for traj in by_pc_traj]
-
-    if mean_axis is not None:
-        by_pc_traj = [traj.mean(axis=mean_axis) for traj in by_pc_traj]
+    by_pc_traj = format_tractories(trajectories, pc_idxs, subset=subset, mean_axis=mean_axis)
     if len(by_pc_traj) == 2:
-        ax.plot(by_pc_traj[0],by_pc_traj[1], **plt_kwargs)
+        ax.plot(by_pc_traj[0], by_pc_traj[1], **plt_kwargs)
     elif len(by_pc_traj) == 3:
-        ax.plot(by_pc_traj[0],by_pc_traj[1],by_pc_traj[2], **plt_kwargs)
+        ax.plot(by_pc_traj[0], by_pc_traj[1], by_pc_traj[2], **plt_kwargs)
     if mean_axis is not None:
         if len(by_pc_traj) == 2:
-            ax.scatter(by_pc_traj[0][0],by_pc_traj[1][0],c=plt_kwargs.get('c','k'))
-        elif len(by_pc_traj) == 3:
-            ax.scatter(by_pc_traj[0][0],by_pc_traj[1][0],by_pc_traj[2][0],c=plt_kwargs.get('c','k'))
+            ax.scatter(by_pc_traj[0][0], by_pc_traj[1][0], c=plt_kwargs.get('c', 'k'))
+        elif len(by_pc_traj) > 2:
+            ax.scatter(by_pc_traj[0][0], by_pc_traj[1][0], by_pc_traj[2][0], c=plt_kwargs.get('c', 'k'))
 
-    set_label_funcs = (ax.set_xlabel,ax.set_ylabel,ax.set_zlabel)
+    set_label_funcs = (ax.set_xlabel,ax.set_ylabel)
     [label_ax(f'PC {pc_idx}') for label_ax,pc_idx in zip(set_label_funcs,pc_idxs)]
     # ax.set_xlabel(f'PC {pc_idxs[0]}')
     # ax.set_ylabel(f'PC {pc_idxs[1]}')
@@ -212,7 +218,7 @@ if __name__ == '__main__':
         sessions[sessname]: Session = pickle.load(f)
     # sessions[sessname]: Session = pd.read_pickle(sess_pkls[0])
 
-    window = [0,0.25]
+    window = [-0.0,0.25]
     # window = [0,2]
     for e in list(sessions[sessname].sound_event_dict.keys()):
         sessions[sessname].spike_obj.get_event_spikes(sessions[sessname].sound_event_dict[e].times,e,window,
@@ -228,6 +234,12 @@ if __name__ == '__main__':
                        for e in all_events}
     _all_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
                    for e in all_events]
+    event_psth_dict['normal_full'] = get_predictor_from_psth(sessions[sessname], 'A-0',[-2,3], [-0.1,1], mean=None,
+                                                              use_unit_zscore=True, use_iti_zscore=False)
+    if 4 in sessions[sessname].td_df['Stage'].values:
+        event_psth_dict['deviant_full'] = get_predictor_from_psth(sessions[sessname], 'A-1', [-2, 3], [-0.1, 1],
+                                                                  mean=None,
+                                                                  use_unit_zscore=True, use_iti_zscore=False)
     # _all_trials = np.split(np.array(trial_oscillator),6)
     x_ser = np.linspace(window[0], window[1], _all_trials[0][0].shape[-1])
     try:
@@ -390,8 +402,8 @@ if __name__ == '__main__':
     cond_lbls = ['rare', 'freq']
     pc_combs = list(combinations(range(3), 2))
     pca_traj_plot = plt.subplots(ncols=len(pc_combs), figsize=[9, 4], sharey=True)
-    pca_traj_plot_3d = plt.subplots(subplot_kw={'projection': '3d'})
-    for pi, pip in enumerate('A'):
+    pca_traj_plot_3d = plt.subplots(figsize=(12,9),subplot_kw={'projection': '3d'})
+    for pi, pip in enumerate('ABCD'):
         events = [e for e in event_psth_dict if pip in e]
 
         event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
@@ -400,25 +412,77 @@ if __name__ == '__main__':
 
         projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
                                       for trial in trials_by_event] for trials_by_event in event_trials]
-        trajs2plot = np.transpose(np.array(projected_trials_by_event[0]),(1,0,2))
+        # trajs2plot = np.transpose(np.array(projected_trials_by_event[0]),(1,0,2))
+        trajs2plot = projected_trials_by_event[0]
         [[[plot_pca_traj(trajs2plot, pc_comb, mean_axis=mean_type, subset=cond_subset - 1,
                          plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label': lbl},
                          plot=(pca_traj_plot[0],pca_traj_plot[1][comb_i]))
            for comb_i,pc_comb in enumerate(pc_combs)]
          for cond_subset,cond_ls,lbl in zip(by_cond_trial_idxs,by_cond_ls,cond_lbls)]
          for mean_type, mean_lw in zip([0],[2,0.1])]
-        [[plot_pca_traj(trajs2plot, [0,1,2], mean_axis=mean_type,
-                        plot=(pca_traj_plot_3d[0], pca_traj_plot_3d[1]),
-                        plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label': lbl})
-          for cond_subset,cond_ls,lbl in zip(by_cond_trial_idxs,by_cond_ls,cond_lbls)]
-         for mean_type, mean_lw in zip([0],[2,0.1])]
+        [[plot_pca_traj(trajs2plot, [0,1,2], mean_axis=mean_type, subset=cond_subset - 1,
+                         plt_kwargs={'c': f'C{pi}', 'ls': cond_ls, 'lw': mean_lw, 'label': lbl},
+                         plot=(pca_traj_plot_3d[0], pca_traj_plot_3d[1]))
+          for cond_subset, cond_ls, lbl in zip(by_cond_trial_idxs, by_cond_ls, cond_lbls)]
+         for mean_type, mean_lw in zip([0], [2, 0.1])]
     pca_traj_plot[1][-1].legend()
     pca_traj_plot[0].show()
     pca_traj_plot[0].savefig(f'{sessname}_pca_trajs.svg')
 
+    style_3d_ax(pca_traj_plot_3d[1])
     pca_traj_plot_3d[1].legend()
     pca_traj_plot_3d[0].show()
     pca_traj_plot_3d[0].savefig(f'{sessname}_pca_trajs_3d.svg')
+
+    pattern_response = get_event_response(event_psth_dict, ['normal_full'])[0]
+    if 4 in sessions[sessname].td_df['Stage'].values:
+        n_normal = pattern_response.shape[0]
+        dev_patts = get_event_response(event_psth_dict, ['deviant_full'])[0]
+        pattern_response = np.vstack([pattern_response,dev_patts])
+        by_cond_trial_idxs = [list(range(n_normal)),list(range(n_normal,n_normal+dev_patts.shape[0]))]
+        cond_lbls = ['normal','deviant']
+    projected_pattern_response = [project_pca(trial, Xa_trial_averaged_pca, standardise=False)
+                                  for trial in pattern_response]
+    projected_pattern_pc123 = [format_tractories(projected_pattern_response, list(range(10)), mean_axis=None,
+                                                subset=cond_subset-1)
+                               for cond_subset in by_cond_trial_idxs]
+    projection_sim_ts = [compare_pip_sims_2way([np.array(projected_pattern_pc123[0]).transpose((1,0,2)),
+                                                np.array(projected_pattern_pc123[1]).transpose((1,0,2))],
+                                               t=t,mean_flag=True)
+                         for t in range(projected_pattern_pc123[0][0].shape[-1])]  # len = n time points
+    mean_comped_sims = np.array([[np.squeeze(pip_sims)[:, 0, 1] for pip_sims in
+                        np.array_split(t_sim[0], (len(cond_lbls)))]
+                        for t_sim in projection_sim_ts])
+    mean_cross_comped_sims = np.array([np.squeeze(t_sim[1][:, 0, 1]) for t_sim in projection_sim_ts])
+
+    full_pattern_xser = np.linspace(-0.1,1, projected_pattern_pc123[0][0].shape[1])
+    rare_vs_freq_sim_ts_plot = plt.subplots()
+    [rare_vs_freq_sim_ts_plot[1].plot(full_pattern_xser,mean_comped_sims[:,cond_i].mean(axis=1),label=cond_lbl)
+     for cond_i, cond_lbl in enumerate(cond_lbls)]
+    rare_vs_freq_sim_ts_plot[1].plot(full_pattern_xser,mean_cross_comped_sims.mean(axis=1),label='rare vs freq',c='k')
+    rare_vs_freq_sim_ts_plot[1].set_ylabel('cosine similarity')
+    rare_vs_freq_sim_ts_plot[1].set_xlabel('Time (s)')
+    rare_vs_freq_sim_ts_plot[1].set_title('Rare vs Frequent response similarity')
+    rare_vs_freq_sim_ts_plot[1].legend()
+    rare_vs_freq_sim_ts_plot[0].show()
+    rare_vs_freq_sim_ts_plot[0].savefig(f'{sessname}_rare_vs_freq_sim_ts.svg')
+
+    projected_pattern_pc123 = [format_tractories(projected_pattern_response, list(range(10)), mean_axis=0,
+                                                subset=cond_subset-1)
+                               for cond_subset in by_cond_trial_idxs]
+    projection_distance_ts = [euclidean(np.array(projected_pattern_pc123[0])[:, t],
+                                        np.array(projected_pattern_pc123[1])[:, t])
+                              for t in range(projected_pattern_pc123[0][0].shape[0])]
+
+    pca_euc_dist_plot = plt.subplots()
+    pca_euc_dist_plot[1].plot(full_pattern_xser,projection_distance_ts)
+    pca_euc_dist_plot[1].set_ylabel('Euclidean distance')
+    pca_euc_dist_plot[1].set_xlabel('Time (s)')
+    pca_euc_dist_plot[1].set_title('Pattern response')
+    pca_euc_dist_plot[0].show()
+    pca_euc_dist_plot[0].savefig(f'{sessname}_pca_euc_dist.svg')
+
+
 
 #
 # from mpl_toolkits.mplot3d import Axes3D

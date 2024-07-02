@@ -54,7 +54,7 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
             raw_files = []
 
         preprocessed_rec = None
-        if raw_files:# and not ow_flag:
+        if raw_files and not ow_flag:
             try:
                 preprocessed_rec = si.load_extractor(preprocessed_dir)
                 logger.debug('read processed preprocessed folder')
