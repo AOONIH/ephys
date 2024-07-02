@@ -456,22 +456,16 @@ if __name__ == '__main__':
 
     if 4 in sessions[sessname].td_df['Stage'].values:
         [by_cond_by_event_trajs.update({e: get_event_trajs(event_psth_dict, e, list(range(n_pcs)))})
-          for e in ['full_normal','full_deviant']]
+         for e in ['full_normal','full_deviant']]
 
-        
-
-    projected_pattern_response = [project_pca(trial, Xa_trial_averaged_pca, standardise=False)
-                                  for trial in pattern_response]
-    projected_pattern_pc123 = [format_tractories(projected_pattern_response, list(range(10)), mean_axis=None,
-                                                subset=cond_subset-1)
-                               for cond_subset in by_cond_trial_idxs]
+    projected_pattern_pc123 = [by_cond_by_event_trajs[f'full_{cond}'] for cond in cond_lbls]
     projection_sim_ts = [compare_pip_sims_2way([np.array(projected_pattern_pc123[0]).transpose((1,0,2)),
                                                 np.array(projected_pattern_pc123[1]).transpose((1,0,2))],
                                                t=t,mean_flag=True)
                          for t in range(projected_pattern_pc123[0][0].shape[-1])]  # len = n time points
     mean_comped_sims = np.array([[np.squeeze(pip_sims)[:, 0, 1] for pip_sims in
-                        np.array_split(t_sim[0], (len(cond_lbls)))]
-                        for t_sim in projection_sim_ts])
+                                  np.array_split(t_sim[0], (len(cond_lbls)))]
+                                 for t_sim in projection_sim_ts])
     mean_cross_comped_sims = np.array([np.squeeze(t_sim[1][:, 0, 1]) for t_sim in projection_sim_ts])
 
     full_pattern_xser = np.linspace(-0.1,1, projected_pattern_pc123[0][0].shape[1])
@@ -481,14 +475,14 @@ if __name__ == '__main__':
     rare_vs_freq_sim_ts_plot[1].plot(full_pattern_xser,mean_cross_comped_sims.mean(axis=1),label='rare vs freq',c='k')
     rare_vs_freq_sim_ts_plot[1].set_ylabel('cosine similarity')
     rare_vs_freq_sim_ts_plot[1].set_xlabel('Time (s)')
-    rare_vs_freq_sim_ts_plot[1].set_title('Rare vs Frequent response similarity')
+    rare_vs_freq_sim_ts_plot[1].set_title(f'{"vs ".join(cond_lbls)} response similarity')
     rare_vs_freq_sim_ts_plot[1].legend()
     rare_vs_freq_sim_ts_plot[0].show()
-    rare_vs_freq_sim_ts_plot[0].savefig(f'{sessname}_rare_vs_freq_sim_ts.svg')
+    rare_vs_freq_sim_ts_plot[0].savefig(f'{sessname}_{"vs".join(cond_lbls)}_sim_ts.svg')
 
-    projected_pattern_pc123 = [format_tractories(projected_pattern_response, list(range(10)), mean_axis=0,
+    projected_pattern_pc_means = [format_tractories(projected_pattern_response, list(range(10)), mean_axis=0,
                                                 subset=cond_subset-1)
-                               for cond_subset in by_cond_trial_idxs]
+                               for cond_subset in by_cond_trial_idxs]  # need to take mean of each event by cond
     projection_distance_ts = [euclidean(np.array(projected_pattern_pc123[0])[:, t],
                                         np.array(projected_pattern_pc123[1])[:, t])
                               for t in range(projected_pattern_pc123[0][0].shape[0])]
