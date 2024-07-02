@@ -32,6 +32,16 @@ def get_event_response(event_response_dict, events):
 
     return event_responses
 
+
+def get_event_trajs(event_response_dict, events, pc_idxs, subset=None,mean_axis=None):
+    event_trials = get_event_response(event_response_dict,events)
+    projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
+                                  for trial in trials_by_event] for trials_by_event in event_trials]
+    by_pc_traj = [format_tractories(trajectories, pc_idxs, subset=subset, mean_axis=mean_axis)
+                  for trajectories in projected_trials_by_event]
+    return by_pc_traj
+
+
 def format_tractories(trajectories, pc_idxs, subset=None, mean_axis=None):
     trajectories = np.transpose(np.array(trajectories), (1, 0, 2))
     by_pc_traj = [trajectories[idx] for idx in pc_idxs]
@@ -143,7 +153,7 @@ def cross_val_gpfa(spike_trains, x_dims):
     return log_likelihoods
 
 
-def plot_pca_traj(trajectories, pc_idxs, mean_axis=None, plot=None, subset=None, plt_kwargs=None):
+def plot_pca_traj(by_pc_traj, pc_idxs, mean_axis=None, plot=None, subset=None, plt_kwargs=None):
 
     if plot:
         fig: plt.Figure = plot[0]
@@ -153,7 +163,6 @@ def plot_pca_traj(trajectories, pc_idxs, mean_axis=None, plot=None, subset=None,
         plot = plt.subplots()
         fig: plt.Figure = plot[0]
         ax: plt.Axes = plot[1]
-    by_pc_traj = format_tractories(trajectories, pc_idxs, subset=subset, mean_axis=mean_axis)
     if len(by_pc_traj) == 2:
         ax.plot(by_pc_traj[0], by_pc_traj[1], **plt_kwargs)
     elif len(by_pc_traj) == 3:
@@ -234,10 +243,10 @@ if __name__ == '__main__':
                        for e in all_events}
     _all_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
                    for e in all_events]
-    event_psth_dict['normal_full'] = get_predictor_from_psth(sessions[sessname], 'A-0',[-2,3], [-0.1,1], mean=None,
+    event_psth_dict['full_normal'] = get_predictor_from_psth(sessions[sessname], 'A-0',[-2,3], [-0.1,1], mean=None,
                                                               use_unit_zscore=True, use_iti_zscore=False)
     if 4 in sessions[sessname].td_df['Stage'].values:
-        event_psth_dict['deviant_full'] = get_predictor_from_psth(sessions[sessname], 'A-1', [-2, 3], [-0.1, 1],
+        event_psth_dict['full_deviant'] = get_predictor_from_psth(sessions[sessname], 'A-1', [-2, 3], [-0.1, 1],
                                                                   mean=None,
                                                                   use_unit_zscore=True, use_iti_zscore=False)
     # _all_trials = np.split(np.array(trial_oscillator),6)
@@ -384,46 +393,52 @@ if __name__ == '__main__':
     projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
                                   for trial in trials_by_event] for trials_by_event in event_trials]
 
-    # group by rare or freq
-    sessions[sessname].td_df['cum_patts'] = np.cumsum(sessions[sessname].td_df['Tone_Position']==0)
-    rare_filt = 'Tone_Position==0 and local_rate>=0.8'
-    freq_filt = 'Tone_Position==0 and local_rate<=0.1'
+    by_cond_by_event_trajs = {}
+    n_pcs = 10
+    if 3 in sessions[sessname].td_df['Stage'].values:
+        # group by rare or freq
+        sessions[sessname].td_df['cum_patts'] = np.cumsum(sessions[sessname].td_df['Tone_Position'] == 0)
+        rare_filt = 'Tone_Position==0 and local_rate>=0.8'
+        freq_filt = 'Tone_Position==0 and local_rate<=0.1'
 
-    patt_trial_idxs = sessions[sessname].sound_event_dict['A-0'].trial_nums-1
+        patt_trial_idxs = sessions[sessname].sound_event_dict['A-0'].trial_nums - 1
 
-    by_cond_trial_nums = [sessions[sessname].td_df.query(cond_filt).index.values
-                           for cond_filt in [rare_filt, freq_filt]]
-    by_cond_trial_idxs = [[np.argwhere(idx == patt_trial_idxs)[0] for idx in cond_idxs if idx in patt_trial_idxs]
-                          for cond_idxs in by_cond_trial_nums]
-    by_cond_trial_idxs = [np.hstack(e) for e in by_cond_trial_idxs]
+        by_cond_trial_nums = [sessions[sessname].td_df.query(cond_filt).index.values
+                              for cond_filt in [rare_filt, freq_filt]]
+        by_cond_trial_idxs = [[np.argwhere(idx == patt_trial_idxs)[0] for idx in cond_idxs if idx in patt_trial_idxs]
+                              for cond_idxs in by_cond_trial_nums]
+        by_cond_trial_idxs = [np.hstack(e) for e in by_cond_trial_idxs]
 
+        cond_lbls = ['rare', 'freq']
+        by_cond_ls = ['-', '--']
+        [[by_cond_by_event_trajs.update({f'{e}_{e_lbl}': get_event_trajs(event_psth_dict, e, list(range(n_pcs)),
+                                                                         subset=e_subset)})
+         for e, in [f'{ee}-0' for ee in 'ABCD']]
+         for e_subset,e_lbl in zip(by_cond_trial_idxs,cond_lbls)]
 
-    by_cond_ls = ['-','--']
-    cond_lbls = ['rare', 'freq']
+    if 4 in sessions[sessname].td_df['Stage'].values:
+        cond_lbls = ['normal', 'deviant']
+        [[by_cond_by_event_trajs.update({f'{e}_{e_lbl}': get_event_trajs(event_psth_dict, e, list(range(n_pcs)))})
+          for e, in [f'{ee}-{cond_i}' for ee in 'ABCD']]
+         for cond_i, e_lbl in enumerate(cond_lbls)]
+
     pc_combs = list(combinations(range(3), 2))
     pca_traj_plot = plt.subplots(ncols=len(pc_combs), figsize=[9, 4], sharey=True)
     pca_traj_plot_3d = plt.subplots(figsize=(12,9),subplot_kw={'projection': '3d'})
+
     for pi, pip in enumerate('ABCD'):
-        events = [e for e in event_psth_dict if pip in e]
-
-        event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-                        for e in events]
-        event_trials = [[np.squeeze(ee) for ee in e] for e in event_trials]
-
-        projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=False)
-                                      for trial in trials_by_event] for trials_by_event in event_trials]
-        # trajs2plot = np.transpose(np.array(projected_trials_by_event[0]),(1,0,2))
-        trajs2plot = projected_trials_by_event[0]
-        [[[plot_pca_traj(trajs2plot, pc_comb, mean_axis=mean_type, subset=cond_subset - 1,
+        by_pc_traj = [by_cond_by_event_trajs[f'{pip}_{cond}'] for cond in cond_lbls]
+        # plot pc trajectories
+        [[[plot_pca_traj(trajs2plot, pc_comb, mean_axis=mean_type,
                          plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label': lbl},
                          plot=(pca_traj_plot[0],pca_traj_plot[1][comb_i]))
            for comb_i,pc_comb in enumerate(pc_combs)]
-         for cond_subset,cond_ls,lbl in zip(by_cond_trial_idxs,by_cond_ls,cond_lbls)]
+         for trajs2plot,cond_ls,lbl in zip(by_pc_traj,by_cond_ls,cond_lbls)]
          for mean_type, mean_lw in zip([0],[2,0.1])]
-        [[plot_pca_traj(trajs2plot, [0,1,2], mean_axis=mean_type, subset=cond_subset - 1,
+        [[plot_pca_traj(trajs2plot, [0,1,2], mean_axis=mean_type,
                          plt_kwargs={'c': f'C{pi}', 'ls': cond_ls, 'lw': mean_lw, 'label': lbl},
                          plot=(pca_traj_plot_3d[0], pca_traj_plot_3d[1]))
-          for cond_subset, cond_ls, lbl in zip(by_cond_trial_idxs, by_cond_ls, cond_lbls)]
+          for trajs2plot, cond_ls, lbl in zip(by_pc_traj, by_cond_ls, cond_lbls)]
          for mean_type, mean_lw in zip([0], [2, 0.1])]
     pca_traj_plot[1][-1].legend()
     pca_traj_plot[0].show()
@@ -434,13 +449,17 @@ if __name__ == '__main__':
     pca_traj_plot_3d[0].show()
     pca_traj_plot_3d[0].savefig(f'{sessname}_pca_trajs_3d.svg')
 
-    pattern_response = get_event_response(event_psth_dict, ['normal_full'])[0]
+    if 3 in sessions[sessname].td_df['Stage'].values:
+        [by_cond_by_event_trajs.update({f'full_{e_lbl}': get_event_trajs(event_psth_dict, e, list(range(n_pcs)),
+                                                                         subset=e_subset)})
+         for e_subset, e_lbl in zip(by_cond_trial_idxs, cond_lbls)]
+
     if 4 in sessions[sessname].td_df['Stage'].values:
-        n_normal = pattern_response.shape[0]
-        dev_patts = get_event_response(event_psth_dict, ['deviant_full'])[0]
-        pattern_response = np.vstack([pattern_response,dev_patts])
-        by_cond_trial_idxs = [list(range(n_normal)),list(range(n_normal,n_normal+dev_patts.shape[0]))]
-        cond_lbls = ['normal','deviant']
+        [by_cond_by_event_trajs.update({e: get_event_trajs(event_psth_dict, e, list(range(n_pcs)))})
+          for e in ['full_normal','full_deviant']]
+
+        
+
     projected_pattern_response = [project_pca(trial, Xa_trial_averaged_pca, standardise=False)
                                   for trial in pattern_response]
     projected_pattern_pc123 = [format_tractories(projected_pattern_response, list(range(10)), mean_axis=None,
