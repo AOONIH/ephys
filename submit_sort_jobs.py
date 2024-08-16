@@ -5,6 +5,10 @@ import argparse
 import subprocess
 import platform
 from datetime import datetime
+
+from tqdm import tqdm
+
+
 # from postprocessing_utils import get_sorting_dirs
 
 
@@ -65,7 +69,7 @@ if __name__ == '__main__':
 
     session_topology = pd.read_csv(sess_topology_path)
     rel_path_to_sorting = Path(f'sorting{config["rec_dir_suffix"]}')/f'{config["sorter"]}{config["sorter_dir_suffix"]}'
-    for session in sessions:
+    for session in tqdm(sessions,total=len(sessions),desc='Submitting jobs'):
         mouseID = session.split('_')[0]
         date_str = session.split('_')[1] if len(session.split('_')) == 2 else None
         if not date_str:

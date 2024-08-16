@@ -82,6 +82,10 @@ def gen_patterned_time_offsets(n_units, n_types, group_noise,max_offset=0.2):
     return normalized_rates
 
 
+def gen_patterned_copies(template:np.ndarray,noise_list:list):
+    return [template+np.random.rand(len(template))*noise for noise in noise_list]
+
+
 if __name__ == '__main__':
 
     window = np.array([-1,1])

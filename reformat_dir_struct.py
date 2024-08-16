@@ -168,10 +168,10 @@ def match2tdata(sessdirs:list[Path],to_matchdirsss:list[list[Path]],datatype_lbl
                     if mapping == 'SKIP':
                         return None
                     mapping = [[int(ee) for ee in e.split(',')] for e in mapping.split(';')]
+                    assert len(mapping) == 2 and len(mapping[0]) == len(mapping[1])
                 except:
                     print('invalid mapping, try again')
             print(f'{mapping = }')
-            assert len(mapping)==2 and len(mapping[0])==len(mapping[1])
             sessdirs = [sessdirs[e] for e in mapping[0]]
             sess_dict['ephys_dir'] = None
             to_matchdirs = [to_matchdirs[e] for e in mapping[1]]
@@ -181,6 +181,8 @@ def match2tdata(sessdirs:list[Path],to_matchdirsss:list[list[Path]],datatype_lbl
         if sess_dict.get('sess_order'):
             continue
         sess_dict['sess_order'] = ['main'] * len(sessdirs)
+    # if len(sess_dict.get('tdata_file')) >1:
+
         # return {'ephys_dir':sessdirs,f'{datatype_lbl}_dir':to_matchdirs, 'sess_order':sess_order}
     return sess_dict
 
@@ -200,7 +202,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('config_file')
     parser.add_argument('topdir')
-    parser.add_argument('projectdir')
+    # parser.add_argument('projectdir')
     parser.add_argument('datadir_lbl')
     # parser.add_argument('dir2copy')
     parser.add_argument('animals')
@@ -240,7 +242,7 @@ if __name__ == '__main__':
                   ceph_dir / posix_from_win(r'X:\Dammy\harpbins')]
     d_lbls = ['videos','beh_bin']
     d_patterns = ['*<name>_<date>_*', f'<name>_HitData_<date>*.bin']
-    all_sess_topology = []
+    all_sess_topology_list = []
 
     csv_path = projectdir / f'session_topology{f"_{args.sess_top_suffix}" if args.sess_top_suffix else ""}.csv'
     if csv_path.exists():
@@ -289,34 +291,48 @@ if __name__ == '__main__':
                                                        orient='columns')
                                 for ephys_dir,other_dirs in zip(sessions, sessions_by_date)]
         elif args.datadir_lbl == 'tdata':
-            session_topology = [pd.DataFrame.from_dict(match2tdata(ephys_dir,other_dirs,d_lbls),
+            # matched_output = [match2tdata(ephys_dir,other_dirs,d_lbls)
+            #                   for ephys_dir,other_dirs in zip(sessions, sessions_by_date)]
+            #
+            # session_topology = pd.DataFrame.from_dict(matched_output,orient='columns').copy()
+            # session_topology = session_topology.dropna(axis=0,how='all')
+
+            session_topology = [pd.DataFrame.from_dict(match2tdata(ephys_dir, other_dirs, d_lbls),
                                                        orient='columns')
-                                for ephys_dir,other_dirs in zip(sessions, sessions_by_date)]
+                                for ephys_dir, other_dirs in zip(sessions, sessions_by_date)]
         else:
             raise NotImplementedError
 
-        all_sess_topology.extend(session_topology)
+        # if session_topology.empty:
+        #     continue
+        all_sess_topology_list.append(session_topology)
         # ephys_sess[f'{d_lbl}_dir'] = session_topology[f'{d_lbl}_dir']
-
-    all_sess_topology = pd.concat(all_sess_topology)
+    # all_sess_topology = sum(all_sess_topology,[])
+    all_sess_topology = pd.concat(sum(all_sess_topology_list,[]))
     all_sess_topology.rename(columns={'beh_bin_dir':'beh_bin'},inplace=True)
     # all_sess_paths_df = pd.DataFrame([_sesss,sessions_by_date])
     # [print(len(e),len(ee)) for e,ee in zip(_sesss,sessions_by_date)]
     # all_sess_topology.columns = ['ephys_dir','videos_dir','sess_order']
     if all_sess_topology.empty:
-        exit('No new sessions found')
+        print('no new sessions found')
+        exit()
     try:
         all_sess_topology['name'] = [e.stem[:4] for e in all_sess_topology['ephys_dir']]
         all_sess_topology['date'] = [extract_date(e.stem) for e in all_sess_topology['ephys_dir']]
 
-    except AttributeError:
+    except:
         all_sess_topology['name'] = [e.stem[:4] for e in all_sess_topology['tdata_file']]
         all_sess_topology['date'] = [extract_date(e.stem) for e in all_sess_topology['tdata_file']]
 
     sound_bins = [list(dirs2match[1].glob(f'{name}*SoundData_{sessdate.stem[-7:]}.bin'))
                   for name,sessdate in zip(all_sess_topology['name'],all_sess_topology['beh_bin'])]
-    assert all([len(e) == 1 for e in sound_bins])
-    all_sess_topology['sound_bin'] = [e[0] for e in sound_bins]
+    sound_bins = [e[0] if e else None for e in sound_bins]
+    all_sess_topology['sound_bin'] = sound_bins
+    all_sess_topology = all_sess_topology.dropna(subset='sound_bin')
+    if all_sess_topology.empty:
+        print('no new sessions found')
+        exit()
+    # assert all([len(e) == 1 for e in sound_bins])
     if not old_all_sess_topology.empty:
         all_sess_topology = pd.concat([old_all_sess_topology, all_sess_topology])
     all_sess_topology.reset_index(drop=True, inplace=True)

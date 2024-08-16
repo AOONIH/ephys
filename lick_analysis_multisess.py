@@ -22,12 +22,12 @@ def generate_lick_data_for_pip(sessions, pip):
     all_licks_to_pip.index = all_licks_to_pip.index.reorder_levels(['sess', 'trial', 'time'])
 
     patt_trials_to_pip = pd.concat([
-        all_licks_to_pip.loc[sessname, sessions[sessname].td_df.query('Tone_Position==0 & Stage==3').index.values, :]
+        all_licks_to_pip.loc[sessname, sessions[sessname].td_df.query('Tone_Position==0 & Stage==3').index.get_level_values('trial_num').values+1, :]
         for sessname in sessions
         if sessname in all_licks_to_pip.index.get_level_values('sess')
     ])
     none_trials_to_pip = pd.concat([
-        all_licks_to_pip.loc[sessname, sessions[sessname].td_df.query('Tone_Position==1 & Stage==3').index.values, :]
+        all_licks_to_pip.loc[sessname, sessions[sessname].td_df.query('Tone_Position==1 & Stage==3').index.get_level_values('trial_num').values+1, :]
         for sessname in sessions
         if sessname in all_licks_to_pip.index.get_level_values('sess')
     ])
@@ -107,26 +107,27 @@ if __name__ == "__main__":
         else:
             normal = sessions[sessname].td_df.query('Session_Block>=0 & Tone_Position==0')['PatternID'].mode()[0]
         normal = [int(pip) for pip in normal.split(';')]
-        sessions[sessname].init_lick_obj(beh_events_path, sound_write_path,normal)
+        sessions[sessname].init_lick_obj(beh_events_path, sound_write_path,[normal])
         sessions[sessname].get_licks_to_event(3, 'X')
-        [sessions[sessname].lick_obj.event_lick_plots[f'licks_to_{event}'][0].savefig(
-            ephys_figdir / f'licks_to_{event}_{sessname}.svg', )
-         for event in ['X']]
-        sessions[sessname].lick_obj.event_lick_plots[f'licks_to_X'][1].set_title(f'{sessname}: licks to X')
+        # [sessions[sessname].lick_obj.event_lick_plots[f'licks_to_{event}'][0].savefig(
+        #     ephys_figdir / f'licks_to_{event}_{sessname}.svg', )
+        #  for event in ['X']]
+        # sessions[sessname].lick_obj.event_lick_plots[f'licks_to_X'][1].set_title(f'{sessname}: licks to X')
         # sessions[sessname].lick_obj.event_lick_plots[f'licks_to_X'][0].show()
-        if normal != [0, 0, 0, 0]:
-            sessions[sessname].get_licks_to_event(normal[0], 'A')
-            [sessions[sessname].lick_obj.event_lick_plots[f'licks_to_{event}'][0].savefig(
-                ephys_figdir / f'licks_to_{event}_{sessname}.svg', )
-                for event in ['A']]
-            sessions[sessname].lick_obj.event_lick_plots[f'licks_to_A'][1].set_title(f'{sessname}: licks to A')
+        # if normal != [0, 0, 0, 0]:
+        #     sessions[sessname].get_licks_to_event(normal[0], 'A')
+        #     [sessions[sessname].lick_obj.event_lick_plots[f'licks_to_{event}'][0].savefig(
+        #         ephys_figdir / f'licks_to_{event}_{sessname}.svg', )
+        #         for event in ['A']]
+        #     sessions[sessname].lick_obj.event_lick_plots[f'licks_to_A'][1].set_title(f'{sessname}: licks to A')
             # sessions[sessname].lick_obj.event_lick_plots[f'licks_to_A'][0].show()
 
     # get all licks to X
 
-    # for pip in ['X','A']:
+    for pip in ['X','A']:
         patt_trials_to_pip, none_trials_to_pip = generate_lick_data_for_pip(sessions, pip)
         lick_to_pip_plot = plot_lick_data([patt_trials_to_pip, none_trials_to_pip], pip,dict(figsize=(3,2.5)))
+        lick_to_pip_plot[0].show()
     #     lick_to_pip_plot[1].set_ylim(0,0.15)
     #     lick_to_pip_plot[1].axvline(0,ls='--',color='k',lw=1)
     #     lick_to_pip_plot[1].locator_params(axis='both', nbins=3)

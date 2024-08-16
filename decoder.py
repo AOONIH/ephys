@@ -53,7 +53,7 @@ def predict_spike_counts_lg(stim, spikes, d=25):
 
 
 def run_decoder(predictors, features, shuffle=False,model='svc', pre_split=None,
-                extra_datasets=None,cv_folds=None,seed=1) -> [float,svm.SVC, [float,]]:
+                extra_datasets=None,cv_folds=None,seed=1, **kwargs) -> [float,svm.SVC, [float,]]:
     # print(f'pre_split = {pre_split}')
     if model == 'svc':
         model_nb = svm.SVC(C=1,class_weight='balanced')
@@ -66,7 +66,8 @@ def run_decoder(predictors, features, shuffle=False,model='svc', pre_split=None,
     elif model == 'linear':
         model_nb = LinearRegression()
     elif model == 'logistic':
-        model_nb = LogisticRegression(class_weight='balanced',max_iter=10000,solver='newton-cg')
+        model_nb = LogisticRegression(class_weight='balanced',max_iter=10000,solver=kwargs.get('solver','newton-cg'),#solver='newton-cg',
+                                      penalty=kwargs.get('penalty','l2'),n_jobs=kwargs.get('n_jobs',1))
     else:
         raise Warning('Invalid model')
     rand_idxs = np.random.choice(predictors.shape[0],predictors.shape[0],replace=False)

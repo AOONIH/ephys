@@ -48,7 +48,8 @@ def get_list_pips_by_property(pip_desc:dict, property_name:str, pip_positions: [
     return list_pip_groups_by_idx
 
 
-def get_reordered_idx(pip_desc,pip_lbls,sort_keys,subset=None):
+def get_reordered_idx(pip_desc,sort_keys,subset=None):
+    pip_lbls = list(pip_desc.keys())
     if not subset:
         subset = pip_lbls
     plot_names = [pip_desc[i]['desc']
@@ -62,7 +63,7 @@ def get_reordered_idx(pip_desc,pip_lbls,sort_keys,subset=None):
     return plot_names, plot_order
 
 
-def compute_self_similarity(pop_rate_mat:np.ndarray, cv_folds=5):
+def compute_self_similarity(pop_rate_mat:np.ndarray, t=-1, cv_folds=5):
     assert cv_folds > 1, 'cv_folds must be > 1'
     all_splits = list(combinations(range(cv_folds),cv_folds-1))
     split_pop_mats = np.array_split(pop_rate_mat, cv_folds)[:cv_folds]
@@ -70,7 +71,7 @@ def compute_self_similarity(pop_rate_mat:np.ndarray, cv_folds=5):
     # [print(e.shape) for e in all_train_mats[0]]
     all_test_mats = [[split_pop_mats[i].mean(axis=0) for i in range(cv_folds) if i not in split]
                      for split in all_splits]
-    fold_sims = [[cosine_similarity([e[:,-1] for e in [np.mean(train_mats,axis=0), np.mean(test_mats,axis=0)]])[0,1]]
+    fold_sims = [[cosine_similarity([e[:,t] for e in [np.mean(train_mats,axis=0), np.mean(test_mats,axis=0)]])[0,1]]
                  for train_mats, test_mats in zip(all_train_mats, all_test_mats)]
 
     return fold_sims
@@ -102,3 +103,30 @@ def compare_pip_sims_2way(pop_rate_mats: [np.ndarray,np.ndarray], n_shuffles=100
 
     return self_sims_by_halves, across_sims_by_halves,shuffled_idxs
 
+
+def plot_sim_by_pip(event_psth_dict, sim_mat, fig, axes, pip_desc, cmap='bwr',im_kwargs=None):
+    for pi, pip2use in enumerate('ABCD'):
+        pip_is = [ii for ii, p in enumerate(event_psth_dict) if pip2use in p]
+        subset_pips = [p for p in event_psth_dict if pip2use in p]
+        similarity_to_pip = sim_mat[pip_is][:, pip_is]
+        reordered_names, reordered_idxs = get_reordered_idx(pip_desc, ['ptype_i'],
+                                                            subset=subset_pips)
+        reordered_idxs = [int(idx / 4) for idx in reordered_idxs]
+        pip_plot_lbls = [e.split(' ')[-1] for e in reordered_names]
+        plot_similarity_mat(similarity_to_pip, pip_plot_lbls,
+                            reorder_idx=reordered_idxs,
+                            cmap=cmap, plot=(fig, axes[pi]),
+                            im_kwargs=im_kwargs,
+                            plot_cbar=True if pi == len('ABCD') - 1 else False)
+        axes[pi].set_title(f'pip {pi}')
+
+
+def plot_sim_by_grouping(sim_mat,grouping,pip_desc,cmap='reds',plot=None,im_kwargs=None):
+    if plot is None:
+        plot = plt.subplots()
+    # sort_keys = grouping
+    plot_names,plot_order = get_reordered_idx(pip_desc, grouping)
+    sim_plot = plot_similarity_mat(sim_mat, plot_names, cmap=cmap,reorder_idx=plot_order,im_kwargs=im_kwargs,
+                                   plot=plot)
+
+    return sim_plot

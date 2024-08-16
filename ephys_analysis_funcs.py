@@ -1,3 +1,5 @@
+import platform
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,7 +24,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from elephant.statistics import instantaneous_rate
 from quantities import s, ms
 from neo import SpikeTrain
-from elephant.kernels import GaussianKernel
+from elephant.kernels import GaussianKernel, ExponentialKernel
 from generate_synthetic_spikes import gen_responses,gen_patterned_unit_rates, gen_patterned_time_offsets
 
 # import seaborn as sns
@@ -84,22 +86,24 @@ def gen_metadata(data_topology_filepath: [str, Path], ceph_dir, col_name='sound_
         data_topology_filepath = Path(data_topology_filepath)
     data_topology = pd.read_csv(data_topology_filepath)
     for idx, sess in data_topology.iterrows():
-
-        e_dir = next(posix_from_win(sess['ephys_dir']).rglob('continuous')).parent
-        bin_stem = sess[col_name]
-        dir_files = list(e_dir.iterdir())
-        if 'metadata.json' not in dir_files or True:
-            if harp_bin_dir and isinstance(harp_bin_dir, Path):
-                harp_bin = harp_bin_dir / f'{bin_stem}_write_data.csv'
-            else:
-                bin_path = Path(bin_stem)
-                harp_bin = bin_path.with_stem(f'{bin_path.stem}_write_data').with_suffix('.csv')
-            # harp_bin_dir = Path(harp_bin_dir)
-            harp_writes = pd.read_csv(harp_bin)
-            trigger_time = harp_writes[harp_writes['DO3'] == True]['Times'].values[0]
-            metadata = {'trigger_time': trigger_time}
-            with open(e_dir / 'metadata.json', 'w') as jsonfile:
-                json.dump(metadata, jsonfile)
+        try:
+            e_dir = next((ceph_dir/posix_from_win(sess['ephys_dir'])).rglob('continuous')).parent
+            bin_stem = sess[col_name]
+            dir_files = list(e_dir.iterdir())
+            if 'metadata.json' not in dir_files or True:
+                if harp_bin_dir and isinstance(harp_bin_dir, Path):
+                    harp_bin = harp_bin_dir / f'{bin_stem}_write_data.csv'
+                else:
+                    bin_path = Path(bin_stem)
+                    harp_bin = bin_path.with_stem(f'{bin_path.stem}_write_data').with_suffix('.csv')
+                # harp_bin_dir = Path(harp_bin_dir)
+                harp_writes = pd.read_csv(harp_bin)
+                trigger_time = harp_writes[harp_writes['DO3'] == True]['Times'].values[0]
+                metadata = {'trigger_time': trigger_time}
+                with open(e_dir / 'metadata.json', 'w') as jsonfile:
+                    json.dump(metadata, jsonfile)
+        except:
+            continue
 
 
 def load_spikes(spike_times_path: [Path | str], spike_clusters_path: [Path | str], parent_dir=None):
@@ -115,6 +119,7 @@ def load_spikes(spike_times_path: [Path | str], spike_clusters_path: [Path | str
     assert spike_times_path.suffix == '.npy' and spike_clusters_path.suffix == '.npy', Warning('paths should be .npy')
 
     if parent_dir:
+        print(f'parent_dir = {parent_dir}')
         spike_times_path, spike_clusters_path = [next(parent_dir.rglob(path.name)) or path
                                                  for path in [spike_times_path, spike_clusters_path]
                                                  if not path.is_absolute()]
@@ -134,7 +139,17 @@ def load_pupil_data(pupil_data_path: [Path | str], parent_dir=None):
     """
     pupil_data_path = Path(pupil_data_path)
     with open(pupil_data_path, 'rb') as f:
-        pupil_data = pickle.load(f)
+        # pupil_data = pickle.load(f)
+        pupil_data = {}
+        while True:
+            try:
+                y = (pickle.load(f))
+                y = {k: y[k] for k in y.keys() if y[k].pupildf is not None}
+                z = {**pupil_data, **y}
+                pupil_data = z
+            except EOFError:
+                print(f'end of file {pupil_data.keys()}')
+                break
     for sess in list(pupil_data.keys()):
         if pupil_data[sess].pupildf is None:
             pupil_data.pop(sess)
@@ -159,7 +174,7 @@ def get_times_in_window(all_times: np.ndarray,window: [list | np.ndarray]) -> np
 def get_spike_rate_in_window(spike_times: np.ndarray, window: [list | np.ndarray], fs):
     spike_train = SpikeTrain(spike_times*s,t_start=window[0],t_stop=window[1])
     bin_firing_rate = np.squeeze(np.array(instantaneous_rate(spike_train,sampling_period=100*ms,
-                                                             kernel=GaussianKernel(40*ms))))
+                                                             kernel=GaussianKernel(20*ms))))
 
     return bin_firing_rate
 
@@ -204,7 +219,7 @@ def gen_spike_matrix_old(spike_time_dict: dict, window, fs):
     return spike_matrix
 
 
-def gen_spike_matrix(spike_time_dict: dict, window, fs):
+def gen_spike_matrix(spike_time_dict: dict, window, fs, kernel_width=40):
     fs = 100
     precision = np.ceil(np.log10(fs)).astype(int)
     time_cols = np.round(np.arange(window[0], window[1] + 1 / fs, 1 / fs), precision)
@@ -215,7 +230,7 @@ def gen_spike_matrix(spike_time_dict: dict, window, fs):
     event_psth = [np.squeeze(np.array(instantaneous_rate(SpikeTrain(c_spiketimes * s,
                                                                     t_start=window[0], t_stop=window[-1]*s+0.011*s),
                                                          sampling_period=10 * ms,
-                                                         kernel=GaussianKernel(40 * ms))))
+                                                         kernel=ExponentialKernel(kernel_width * ms))))
                   for c_spiketimes in spike_time_dict.values()]
     spike_matrix = pd.DataFrame(event_psth,columns=time_cols,index=list(spike_time_dict.keys()))
     spike_matrix.columns = pd.to_timedelta(spike_matrix.columns, 's')
@@ -237,6 +252,28 @@ def plot_spike_time_raster(spike_time_dict: dict, ax=None, **pltkwargs):
                            disable=True):
         ax.scatter(spike_time_dict[cluster_id], [cluster_id] * len(spike_time_dict[cluster_id]), **pltkwargs)
         ax.invert_xaxis()
+
+
+def unique_legend(plotfig:(plt.figure().figure,list,tuple),**leg_kwargs):
+    if isinstance(plotfig,(tuple,list)):
+        if isinstance(plotfig[1],np.ndarray):
+            plotaxes2use = plotfig[1].flatten()
+        elif isinstance(plotfig[1], dict):
+            plotaxes2use = plotfig[1].values()
+        else:
+            print('wrong figure used, returning none')
+            plotaxes2use = None
+    elif isinstance(plotfig,np.ndarray):
+        plotaxes2use = plotfig.flatten()
+    elif isinstance(plotfig[1],dict):
+        plotaxes2use = plotfig[1].values()
+    else:
+        plotaxes2use = None
+        print('wrong figure used, returning none')
+    for axis in plotaxes2use:
+        handle, label = axis.get_legend_handles_labels()
+        axis.legend(pd.Series(handle).unique(), pd.Series(label).unique(),**leg_kwargs)
+
 
 
 def gen_firing_rate_matrix(spike_matrix: pd.DataFrame, bin_dur=0.01, baseline_dur=0.0,
@@ -274,17 +311,27 @@ def format_sound_writes(sound_writes_df: pd.DataFrame, patterns: [[int, ], ], ) 
     # assign sounds to trials
     sound_writes_df = sound_writes_df.drop_duplicates(subset='Timestamp', keep='first').copy()
     sound_writes_df = sound_writes_df.reset_index(drop=True)
+    sound_writes_df['rand_n'] = np.random.randint(0,8,len(sound_writes_df)).astype(int)
     # sound_writes_df['Timestamp'] = sound_writes_df['Timestamp']
     sound_writes_df['Trial_Number'] = np.full_like(sound_writes_df.index, -1)
     sound_writes_diff = sound_writes_df['Time_diff'] = sound_writes_df['Timestamp'].diff()
     # print(sound_writes_diff[:10])
-    long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 1))
+    if 3 in sound_writes_df['Payload'].values:
+        long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 2))
+    else:
+        long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 1))
+
     for n, idx in enumerate(long_dt):
         sound_writes_df.loc[idx:, 'Trial_Number'] = n
     sound_writes_df['Trial_Number'] = sound_writes_df['Trial_Number'] + 1
 
     sound_writes_df['Time_diff'] = sound_writes_df['Timestamp'].diff()
     sound_writes_df['Payload_diff'] = sound_writes_df['Payload'].diff()
+    matrix_d_X_times = np.array(np.matrix(sound_writes_df['Timestamp'].values).T -
+                                sound_writes_df.query('Payload == 3')['Timestamp'].values)
+    matrix_d_X_times[matrix_d_X_times > 0] = 9999
+    matrix_d_X_times = np.min(np.abs(matrix_d_X_times),axis=1)
+    sound_writes_df['d_X_times'] = matrix_d_X_times
 
     tones = sound_writes_df['Payload'].unique()
     pattern_tones = tones[tones >= 8]
@@ -774,7 +821,7 @@ class Decoder:
         self.cm_plot = None
         self.prediction_ts = None
 
-    def decode(self, dec_kwargs, **kwargs):
+    def decode(self, dec_kwargs, parallel_flag=True, **kwargs):
         if not dec_kwargs.get('cv_folds', 0):
             n_runs = kwargs.get('n_runs', 500)
         else:
@@ -787,10 +834,18 @@ class Decoder:
             n_run_pred = [balance_predictors(self.predictors, self.features) for i in range(n_runs)]
             preds = [run[0] for run in n_run_pred]
             feats = [run[1] for run in n_run_pred]
-        with multiprocessing.Pool(initializer=init_pool_processes) as pool:
-            results = list(tqdm(pool.starmap(partial(run_decoder, model=self.model_name,
-                                                     **dec_kwargs),
-                                             zip(preds, feats)), total=n_runs))
+        if parallel_flag:
+            print('running in parallel')
+            with multiprocessing.Pool(initializer=init_pool_processes) as pool:
+                results = list(tqdm(pool.starmap(partial(run_decoder, model=self.model_name,
+                                                         predictors=preds, features=feats,
+                                                         **dec_kwargs),
+                                                 # zip(preds, feats)
+                                                 range(n_runs)),
+                                    total=n_runs))
+        else:
+            results  = [run_decoder(self.predictors, self.features, model=self.model_name, **dec_kwargs)
+                        for i in tqdm(range(n_runs), total=n_runs, desc='Decoding single threaded')]
         # results = []
         # register_at_fork(after_in_child=np.random.seed)
         # with multiprocessing.Pool(initializer=np.random.seed) as pool:
@@ -864,9 +919,11 @@ class SessionLicks:
         self.event_cluster_spike_times = dict()
         self.sound_writes = sound_writes
 
-    def get_event_spikes(self, event_idx: int, event_name: str, window: [list | np.ndarray], sessname: str):
-        event_times = self.sound_writes.query(f'Payload == {event_idx}')['Timestamp'].values
-        event_trialnum = self.sound_writes.query(f'Payload == {event_idx}')['Trial_Number'].values
+    def get_event_spikes_slow(self, event_idx: int, event_name: str, window: [list | np.ndarray], sessname: str,
+                         sound_df_query='',**kwargs):
+        sound_df_query = f'Payload == {event_idx} & {sound_df_query}' if sound_df_query else f'Payload == {event_idx}'
+        event_times = self.sound_writes.query(sound_df_query)['Timestamp'].values
+        event_trialnum = self.sound_writes.query(sound_df_query)['Trial_Number'].values
         self.event_spike_matrices[event_name] = dict()
         self.event_cluster_spike_times[event_name] = dict()
         for event_time in event_times:
@@ -876,7 +933,7 @@ class SessionLicks:
             if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
                 self.event_spike_matrices[event_name][f'{event_name}_{event_time}'] = gen_spike_matrix(
                     self.event_cluster_spike_times[event_name][f'{event_name}_{event_time}'],
-                    window, self.new_fs)
+                    window, self.new_fs, kwargs.get('kernel_width',40))
         # self.event_licks[f'{event_name}_licks'] = pd.concat([self.event_spike_matrices[e_key] for e_key in self.event_spike_matrices
         #                                                      if event_name in e_key])
         self.event_licks[f'{event_name}_licks'] = pd.concat(self.event_spike_matrices[event_name])
@@ -884,6 +941,53 @@ class SessionLicks:
         self.event_licks[f'{event_name}_licks'].index = pd.MultiIndex.from_arrays([event_times, event_trialnum,
                                                                                    [sessname] * len(event_trialnum)],
                                                                                   names=['time', 'trial', 'sess'])
+
+    def get_event_spikes(self, event_idx: int, event_name: str, window: [list | np.ndarray], sessname: str,
+                         sound_df_query='', **kwargs):
+
+        # Construct the query string
+        query_str = f'Payload == {event_idx}'
+        if sound_df_query:
+            query_str += f' & {sound_df_query}'
+
+        # Query the sound writes DataFrame once
+        queried_sound_writes = self.sound_writes.query(query_str)
+        event_times = queried_sound_writes['Timestamp'].values
+        event_trialnum = queried_sound_writes['Trial_Number'].values
+
+        # Initialize the dictionaries if they do not exist
+        if event_name not in self.event_spike_matrices:
+            self.event_spike_matrices[event_name] = {}
+        if event_name not in self.event_cluster_spike_times:
+            self.event_cluster_spike_times[event_name] = {}
+
+        # Precompute kernel width
+        kernel_width = kwargs.get('kernel_width', 40)
+
+        # Get unique event times that need to be processed
+        existing_keys = self.event_cluster_spike_times[event_name].keys()
+
+        new_event_times = [et for et in event_times if f'{event_name}_{et}' not in existing_keys]
+
+        # Process each unique event time
+        for event_time in new_event_times:
+            event_key = f'{event_name}_{event_time}'
+
+            # Get spike times in the window
+            self.event_cluster_spike_times[event_name][event_key] = get_spike_times_in_window(
+                event_time, self.cluster_spike_times_dict, window, self.new_fs)
+
+            # Generate spike matrix
+            self.event_spike_matrices[event_name][event_key] = gen_spike_matrix(
+                self.event_cluster_spike_times[event_name][event_key], window, self.new_fs, kernel_width)
+
+        # Concatenate spike matrices
+        self.event_licks[f'{event_name}_licks'] = pd.concat(self.event_spike_matrices[event_name].values(), axis=0)
+
+        # Create multi-index for licks
+        multi_index = pd.MultiIndex.from_arrays([event_times, event_trialnum, [sessname] * len(event_trialnum)],
+                                                names=['time', 'trial', 'sess'])
+        self.event_licks[f'{event_name}_licks'].index = multi_index
 
     def plot_licks(self, event_name, window=(-3, 3)):
         licks_to_event = self.event_licks[f'{event_name}_licks']
@@ -906,6 +1010,76 @@ class SessionPupil:
         self.beh_events = beh_events
 
     def align2events(self, event_idx: int, event_name: str, window, sessname: str,
+                     sound_df_query='', baseline_dur=0.0, size_col='dlc_radii_a_zscored',event_shifts=None):
+        """
+            Aligns pupil data to sound events.
+
+            Parameters
+            ----------
+            event_idx : int
+                Index of the sound event to align to.
+            event_name : str
+                Name of the sound event to align to.
+            window : tuple
+                Time window to align to the sound event.
+            sessname : str
+                Name of the session.
+            baseline_dur : float, optional
+                Duration of the baseline period to subtract from the aligned pupil data.
+            size_col : str, optional
+                Name of the column containing pupil size data.
+
+            Returns
+            -------
+            None
+            """
+
+        pupil_size = self.pupil_data[size_col]
+        start, end = pupil_size.index[0], pupil_size.index[-1]
+        event_trialnums = self.sound_writes.query(f'Payload == {event_idx}')['Trial_Number'].values
+        dt = np.round(np.nanmedian(np.diff(pupil_size.index)),2)
+        event_tdeltas = np.round(np.arange(window[0], window[1], dt), 2)
+
+        sound_df_query = f'Payload == {event_idx} & {sound_df_query}' if sound_df_query else f'Payload == {event_idx}'
+        event_times = self.sound_writes.query(sound_df_query)['Timestamp'].values
+        if event_shifts is not None:
+            event_times += event_shifts
+
+        # aligned_epochs = [[pupil_size.loc[eventtime + tt], np.nan) for tt in event_tdeltas]
+        #                   for eventtime in event_times]
+        # aligned_epochs = [pupil_size.loc[eventtime+window[0]: eventtime+window[1]] for eventtime in event_times]
+        aligned_epochs = []
+        for eventtime in event_times:
+            try:
+                a = pupil_size.loc[eventtime + window[0]: eventtime + window[1]]
+            except KeyError:
+                print(f'{sessname}: {start<eventtime<end= } {eventtime} not found')
+                continue
+            if a.isna().all():
+                print(f'{sessname}: {start<eventtime<end= } {eventtime} not found')
+                aligned_epochs.append(pd.Series(np.full_like(event_tdeltas, np.nan)))
+            else:
+                aligned_epochs.append(pupil_size.loc[eventtime + window[0]: eventtime + window[1]])
+        for aligned_epoch, eventtime in zip(aligned_epochs, event_times):
+            aligned_epoch.index = np.round(aligned_epoch.index - eventtime, 2)
+        sessname_list = [sessname] * len(event_times)
+        aligned_epochs_df = pd.DataFrame(aligned_epochs, columns=event_tdeltas,
+                                         index=pd.MultiIndex.from_tuples(list(zip(event_times, event_trialnums,
+                                                                                  sessname_list)),
+                                                                         names=['time', 'trial', 'sess']))
+        aligned_epochs_df = aligned_epochs_df.dropna(axis=0, how='all')
+        # for col in aligned_epochs_df.columns:
+        #     aligned_epochs_df[col] = pd.to_numeric(aligned_epochs_df[col],errors='coerce')
+        aligned_epochs_df = aligned_epochs_df.ffill(axis=1, )
+        aligned_epochs_df = aligned_epochs_df.bfill(axis=1, )
+        if baseline_dur:
+            epoch_baselines = aligned_epochs_df.loc[:, -baseline_dur:0.0]
+            aligned_epochs_df = aligned_epochs_df.sub(epoch_baselines.mean(axis=1), axis=0)
+
+        self.aligned_pupil[event_name] = aligned_epochs_df
+
+    def align2events_w_td_df(self,td_df: pd.DataFrame, td_df_column: str, td_df_query: str, window, sessname: str,
+                     event_idx: int, event_name: str,
                      baseline_dur=0.0, size_col='dlc_radii_a_zscored'):
         """
             Aligns pupil data to sound events.
@@ -932,29 +1106,39 @@ class SessionPupil:
 
         pupil_size = self.pupil_data[size_col]
         start, end = pupil_size.index[0], pupil_size.index[-1]
-        event_times = self.sound_writes.query(f'Payload == {event_idx}')['Timestamp'].values
-        event_trialnums = self.sound_writes.query(f'Payload == {event_idx}')['Trial_Number'].values
-        dt = np.nanmedian(np.diff(pupil_size.index))
+        dt = np.round(np.nanmedian(np.diff(pupil_size.index)), 2)
         event_tdeltas = np.round(np.arange(window[0], window[1], dt), 2)
 
-        # aligned_epochs = [[pupil_size.loc[eventtime + tt], np.nan) for tt in event_tdeltas]
-        #                   for eventtime in event_times]
-        # aligned_epochs = [pupil_size.loc[eventtime+window[0]: eventtime+window[1]] for eventtime in event_times]
+        event_trials = td_df.query(td_df_query)
+        # convert to harp time
+        event_trials_tdeltas = event_trials.eval(f'{td_df_column} - Bonsai_Time_dt',inplace=False)
+        event_times = event_trials['Harp_Time'] + event_trials_tdeltas.dt.total_seconds()
+        event_trialnums = event_trials.index.get_level_values('trial_num')
+
         aligned_epochs = []
         for eventtime in event_times:
             a = pupil_size.loc[eventtime + window[0]: eventtime + window[1]]
             if a.isna().all():
-                print(f'{start<eventtime<end= } {eventtime} not found')
+                print(f'{sessname}: {start<eventtime<end= } {eventtime} not found')
                 aligned_epochs.append(pd.Series(np.full_like(event_tdeltas, np.nan)))
             else:
                 aligned_epochs.append(pupil_size.loc[eventtime + window[0]: eventtime + window[1]])
         for aligned_epoch, eventtime in zip(aligned_epochs, event_times):
             aligned_epoch.index = np.round(aligned_epoch.index - eventtime, 2)
         sessname_list = [sessname] * len(event_times)
-        aligned_epochs_df = pd.DataFrame(aligned_epochs, columns=event_tdeltas,
-                                         index=pd.MultiIndex.from_tuples(list(zip(event_times, event_trialnums,
-                                                                                  sessname_list)),
-                                                                         names=['time', 'trial', 'sess']))
+        try:
+            aligned_epochs_df = pd.DataFrame(aligned_epochs, columns=event_tdeltas,
+                                             index=pd.MultiIndex.from_tuples(list(zip(event_times, event_trialnums,
+                                                                                      sessname_list)),
+                                                                             names=['time', 'trial', 'sess']))
+        except pd.errors.InvalidIndexError:
+            print(f'{sessname} error')
+            print(event_times, event_trialnums, sessname_list)
+            raise pd.errors.InvalidIndexError
+        # aligned_epochs_df = pd.DataFrame(aligned_epochs, columns=event_tdeltas,
+        #                                  index=pd.MultiIndex.from_tuples(list(zip(event_times, event_trialnums,
+        #                                                                           sessname_list)),
+        #                                                                  names=['time', 'trial', 'sess']))
         aligned_epochs_df = aligned_epochs_df.dropna(axis=0, how='all')
         # for col in aligned_epochs_df.columns:
         #     aligned_epochs_df[col] = pd.to_numeric(aligned_epochs_df[col],errors='coerce')
@@ -972,6 +1156,7 @@ class Session:
         self.pupil_obj = None
         self.lick_obj = None
         self.iti_zscore = None
+        self.pip_desc =  None
         self.td_df = pd.DataFrame()
         self.sessname = sessname
         self.spike_obj = None
@@ -1262,6 +1447,22 @@ class Session:
         self.td_df = pd.read_csv(tdfile_path)
         self.get_n_since_last()
         self.get_local_rate()
+        sessname = self.sessname
+        name, date = sessname.split('_')
+        if not date.isnumeric():
+            date = date[:-1]
+
+        if 'Session_Block' not in self.td_df.columns:
+            first_dev_trial = self.td_df.query('Patern_Type != 0').index[0] if len(self.td_df.query('Patern_Type != 0'))>0 else self.td_df.shape[0]
+            sess_block = [-1 if r['WarmUp'] else 0 if r['Stage'] <= 3 else 2 if r['Stage']==4 and idx<first_dev_trial
+                          else 3 if r['Stage']==4 and idx>=first_dev_trial else 0 for idx, r in self.td_df.iterrows()]
+            self.td_df['Session_Block'] = sess_block
+
+        self.td_df.index = pd.MultiIndex.from_arrays(
+            [[sessname] * len(self.td_df), [name] * len(self.td_df), [date] * len(self.td_df),
+             self.td_df.reset_index().index+1],
+            names=['sess', 'name', 'date', 'trial_num'])
+
 
     def get_n_since_last(self):
         self.td_df['n_since_last'] = np.arange(self.td_df.shape[0])
@@ -1280,24 +1481,46 @@ class Session:
         sound_events = format_sound_writes(sound_events, normal)
         self.lick_obj = SessionLicks(licks, sound_events)
 
-    def get_licks_to_event(self, event_idx, event_name, window=(-3, 3), plot_kwargs=None):
-        self.lick_obj.get_event_spikes(event_idx, event_name, window, self.sessname)
-        self.lick_obj.plot_licks(event_name, window)
+    def get_licks_to_event(self, event_idx, event_name, window=(-3, 3), align_kwargs=None,plot=False):
+        self.lick_obj.get_event_spikes(event_idx, event_name, window, self.sessname,
+                                       **align_kwargs if align_kwargs else {})
+        if plot:
+            self.lick_obj.plot_licks(event_name, window)
 
-    def init_pupil_obj(self, pupil_data, sound_events_path, beh_events_path, normal) -> SessionPupil:
+    def init_pupil_obj(self, pupil_data, sound_events_path, beh_events_path, normal):
         sound_events = pd.read_csv(sound_events_path)
         beh_events = pd.read_csv(beh_events_path)
         sound_events = format_sound_writes(sound_events, normal)
         self.pupil_obj = SessionPupil(pupil_data, sound_events, beh_events)
 
-    def get_pupil_to_event(self, event_idx, event_name, window=(-3, 3), align_kwargs=None, plot_kwargs=None):
-        self.pupil_obj.align2events(event_idx, event_name, window, self.sessname,
-                                    **align_kwargs if align_kwargs else {})
-        # self.pupil_obj.plot_pupil(event_name, window)
+    def get_pupil_to_event(self, event_idx, event_name, window=(-3, 3), align_kwargs=None,alignmethod='w_soundcard',
+                           plot_kwargs=None):
+        if alignmethod == 'w_soundcard':
+            self.pupil_obj.align2events(event_idx, event_name, window, self.sessname,
+                                        **align_kwargs if align_kwargs else {})
+        elif alignmethod == 'w_td_df':
+            if align_kwargs and 'sound_df_query' in align_kwargs:
+                align_kwargs.pop('sound_df_query')
+            if event_name == 'X':
+                col2use = 'Gap_Time_dt'
+                td_query = 'Trial_Outcome in [0,1]'
+            elif event_name == 'A':
+                col2use = 'ToneTime_dt'
+                td_query = 'Tone_Position == 0 & N_TonesPlayed > 0'
+            else:
+                raise NotImplementedError
+            try:
+                self.pupil_obj.align2events_w_td_df(self.td_df,col2use, td_query,
+                                                    window, self.sessname,event_idx, event_name,
+                                                    **align_kwargs if align_kwargs else {})
+            except KeyError:
+                print(f'Could not align to event {event_name} in session {self.sessname}')
+        else:
+            raise NotImplementedError
 
 
 def get_predictor_from_psth(sess_obj: Session, event_key, psth_window, new_window, mean=np.mean, mean_axis=2,
-                            use_iti_zscore=False,use_unit_zscore=True) -> np.ndarray:
+                            use_iti_zscore=False,use_unit_zscore=True,baseline=0) -> np.ndarray:
     """
     Generate a predictor array from a PSTH (peristimulus time histogram) using the provided session object, event key,
     PSTH window, new window, and optional mean and mean axis parameters. Return the predictor array as a NumPy array.
@@ -1315,6 +1538,9 @@ def get_predictor_from_psth(sess_obj: Session, event_key, psth_window, new_windo
     #                                             baseline_dur=0, ).loc[:, td_start:td_end]
     # predictor = predictor_rate_mat.values.reshape(
     #     (-1, event_arr.shape[1], predictor_rate_mat.shape[1]))  # units x trials x t steps
+    if baseline:
+        baseline_window_idx = np.logical_and(event_arr_tseries >= -baseline, event_arr_tseries <=0)
+        event_arr = event_arr - np.mean(event_arr[:, :, baseline_window_idx], axis=2, keepdims=True)
     predictor = event_arr[:, :, time_window_idx]
     if use_iti_zscore:
         predictor = zscore_by_unit(predictor, sess_obj.iti_zscore[0], sess_obj.iti_zscore[1])
@@ -1403,7 +1629,7 @@ def get_main_sess_td_df(name, date, main_sess_td_name, home_dir):
     td_path = td_path_pattern.replace('<name>', main_sess_td_name.split('_')[0])
     abs_td_path_dir = home_dir / td_path
     abs_td_path = next(abs_td_path_dir.glob(f'{name}_TrialData_{date}*.csv'))
-    print(f'{abs_td_path = }')
+    # print(f'{abs_td_path = }')
     main_sess_td = pd.read_csv(abs_td_path)
     return main_sess_td, abs_td_path
 
@@ -1413,8 +1639,22 @@ def get_decoder_accuracy(sess_obj: Session, decoder_name):
 
 
 def load_sess_pkl(pkl_path):
+    sys_os = platform.system().lower()
+    if sys_os == 'windows':
+        import pathlib
+        temp = pathlib.PosixPath
+        pathlib.PosixPath = pathlib.WindowsPath
+    if sys_os == 'linux':
+        import pathlib
+        temp = pathlib.WindowsPath
+        pathlib.WindowsPath = pathlib.PosixPath
     with open(pkl_path, 'rb') as pklfile:
-        sess_obj: Session = pickle.load(pklfile)
+        try:sess_obj: Session = pickle.load(pklfile)
+        except:
+            print(f'{pkl_path} error')
+            return None
+        # sess_obj.sound_event_dict = {}
+        # sessions[sess_obj.sessname] = sess_obj
     return sess_obj
 
 
@@ -1441,8 +1681,8 @@ def get_property_from_decoder_pkl(pkl_path: str, decoder_name: str, property_nam
 
 def get_pip_desc(pip: str, pip_idx_dict: dict, pip_lbl_dict: dict, n_per_rule: int) -> [int, int, str, str, int,str]:
     position = ord(pip.split('-')[0]) - ord('A') + 1
-    idx = pip_idx_dict[pip]
-    name = pip_lbl_dict[idx]
+    idx = pip_idx_dict[pip] if pip_idx_dict else None
+    name = pip_lbl_dict[idx] if pip_lbl_dict else None
     ptype = 'ABCD' if int(pip.split('-')[1]) % n_per_rule==0 else 'ABBA'
     ptype_i = 0 if int(pip.split('-')[1]) % n_per_rule==0 else 1
     group = int(int(pip.split('-')[1]) / n_per_rule)
@@ -1468,3 +1708,29 @@ def get_pip_info(sound_event_dict,normal_patterns,n_patts_per_rule):
     pip_names = {idx: lbl for idx, lbl in zip(sum(normal_patterns, []), 'ABCD' * len(normal_patterns))}
     [pip_desc.update({pip: get_pip_desc(pip, pip_idxs, pip_names, n_patts_per_rule)}) for pip in pip_idxs]
     return pip_desc, pip_lbls,pip_names
+
+
+def group_responses(event_dict:dict,pip_desc:dict,property:dict):
+
+    events2use = [ee for ee in pip_desc if pip_desc[ee][property.key()] == property.value()]
+    responses = np.array([event_dict[e] for e in events2use])
+
+    return responses
+
+
+def plot_psth_by_group(property:dict, pip_desc:dict,):
+    for group in np.unique([pip_desc[e][property.key()] for e in pip_desc]):
+        responses = group_responses(pip_desc, property)
+
+
+def gen_response_df(event_psth_dict:dict, pip_desc:dict, units:list):
+    dfs = []
+    for event in event_psth_dict:
+        event_responses = pd.DataFrame(np.vstack(event_psth_dict[event].mean(axis=0)))
+        units = list(range(event_responses.shape[0]))
+        properties = [[pip_desc[event][v]]*len(units) for v in ['idx','position','ptype_i','group']]
+        multi_idx = pd.MultiIndex.from_arrays([units,[event]*len(units),*properties],
+                                              names = ['units','name','idx','position','ptype_i','group'])
+        event_responses.index = multi_idx
+        dfs.append(event_responses)
+    return pd.concat(dfs,axis=0)
