@@ -63,7 +63,7 @@ def get_reordered_idx(pip_desc,sort_keys,subset=None):
     return plot_names, plot_order
 
 
-def compute_self_similarity(pop_rate_mat:np.ndarray, t=-1, cv_folds=5):
+def compute_self_similarity(pop_rate_mat:np.ndarray, t=-1, cv_folds=5,mean_flag=False):
     assert cv_folds > 1, 'cv_folds must be > 1'
     all_splits = list(combinations(range(cv_folds),cv_folds-1))
     split_pop_mats = np.array_split(pop_rate_mat, cv_folds)[:cv_folds]
@@ -71,7 +71,8 @@ def compute_self_similarity(pop_rate_mat:np.ndarray, t=-1, cv_folds=5):
     # [print(e.shape) for e in all_train_mats[0]]
     all_test_mats = [[split_pop_mats[i].mean(axis=0) for i in range(cv_folds) if i not in split]
                      for split in all_splits]
-    fold_sims = [[cosine_similarity([e[:,t] for e in [np.mean(train_mats,axis=0), np.mean(test_mats,axis=0)]])[0,1]]
+    fold_sims = [[cosine_similarity([e[:,t] if not mean_flag else e.mean(axis=1)
+                                     for e in [np.mean(train_mats,axis=0), np.mean(test_mats,axis=0)]])[0,1]]
                  for train_mats, test_mats in zip(all_train_mats, all_test_mats)]
 
     return fold_sims
@@ -82,7 +83,8 @@ def compare_pip_sims_2way(pop_rate_mats: [np.ndarray,np.ndarray], n_shuffles=100
     self_sims_by_halves = [[[cosine_similarity([(np.squeeze(e).mean(axis=0) if mean_flag else np.squeeze(e))[:, t]
                                                 for e in np.array_split(rate_mat[shuffle],2)])]
                             for shuffle in tqdm([np.random.permutation(rate_mat.shape[0])
-                                                 for _ in range(n_shuffles)], desc='shuffle self sims', total= n_shuffles)
+                                                 for _ in range(n_shuffles)], desc='shuffle self sims', total= n_shuffles,
+                                                disable=True)
                             ]
                            for rate_mat in pop_rate_mats]
 
@@ -121,7 +123,7 @@ def plot_sim_by_pip(event_psth_dict, sim_mat, fig, axes, pip_desc, cmap='bwr',im
         axes[pi].set_title(f'pip {pi}')
 
 
-def plot_sim_by_grouping(sim_mat,grouping,pip_desc,cmap='reds',plot=None,im_kwargs=None):
+def plot_sim_by_grouping(sim_mat,grouping,pip_desc,cmap='Reds',plot=None,im_kwargs=None):
     if plot is None:
         plot = plt.subplots()
     # sort_keys = grouping

@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
-from scipy.stats import ttest_ind, sem, permutation_test
+from scipy.signal import savgol_filter
+from scipy.stats import ttest_ind, sem, permutation_test, ttest_1samp
 from tqdm import tqdm
 
 from behviour_analysis_funcs import get_all_cond_filts, get_drug_dates
@@ -17,7 +18,7 @@ from ephys_analysis_funcs import posix_from_win, Session, get_main_sess_patterns
 
 import yaml
 
-from pupil_ephys_funcs import plot_pupil_diff_across_sessions
+from pupil_ephys_funcs import plot_pupil_diff_across_sessions, plot_pupil_diff_max_by_cond
 
 if '__main__' == __name__:
 
@@ -76,8 +77,8 @@ if '__main__' == __name__:
     patt_nonpatt_cols = ['darkgrey','indigo']
 
     #  figure 1 pupil
-    fig1_dir = ceph_dir / 'Dammy' / 'figures' / 'figure1_pupil'
-    fig1_pkl_dir = ceph_dir / 'Dammy' / 'figures' / 'figure1_pupil' / 'pickles'
+    fig1_dir = ceph_dir / 'Dammy' / 'figures' / 'figure1_pupil_2'
+    fig1_pkl_dir = ceph_dir / 'Dammy' / 'figures' / 'figure1_pupil_2' / 'pickles'
     if not fig1_dir.is_dir():
         fig1_dir.mkdir()
     if not fig1_pkl_dir.is_dir():
@@ -112,19 +113,52 @@ if '__main__' == __name__:
     rare_vs_frequent_drug_plots[0].show()
     rare_vs_frequent_drug_plots[0].savefig(fig1_dir/f'rare_vs_frequent_pupil_response_all_sessions_all_cohorts.svg')
 
-    rare_freq_diff_plot = plt.subplots(ncols=len(drug_sess_dict), sharey='row', figsize=(12, 5))
-    for i, sess_type in enumerate(['none', 'saline', 'muscimol']):
-        for event, event_response_tag, col in zip(['Pattern', 'X'], ['A_by_cond', 'X_by_cond'], ['g', 'b']):
-            event_response = event_dfs_dict[event_response_tag]
-            response_diff = plot_pupil_diff_across_sessions(['rare', 'frequent'], event_response, [sess_type],
-                                                            drug_sess_dict,
-                                                            plot=[rare_freq_diff_plot[0], rare_freq_diff_plot[1][i]],
-                                                            plt_kwargs=dict(c=col, label=event))
+    X_by_drug_plot = plt.subplots()
+    for di,drug in enumerate(['none', 'saline', 'muscimol']):
+        drug_sess_dict[drug] = drug_sess_dict[drug][:-1]
+        event_resps_dict: dict = event_dfs_dict['X_by_cond']
+        data = plot_pupil_diff_max_by_cond(event_resps_dict,
+                                    ['rare', 'frequent', ],
+                                    sess_list=drug_sess_dict[drug],
+                                    window_by_stim=[(1.5, 2.5), (1.5, 2.5)][0],
+                                    mean=np.max,
+                                    plot=X_by_drug_plot,
+                                    plot_kwargs={'showfliers': False,
+                                                 'labels': [drug if drug != 'none' else 'control'],
+                                                 'positions': [di],
+                                                 'widths': 0.4,
+                                                 },
+                                    permutation_test=False,
+                                    group_name='name')
+        ttest = ttest_1samp(data[0].values, 0, alternative='greater')
+        print(f'{drug} ttest pval: {ttest.pvalue}')
+    X_by_drug_plot[1].set_title('')
+    X_by_drug_plot[1].locator_params(axis='y', nbins=4)
+    X_by_drug_plot[1].axhline(0, color='k', ls='--')
+    X_by_drug_plot[1].set_ylabel('')
+    X_by_drug_plot[0].set_layout_engine('tight')
+    X_by_drug_plot[0].set_size_inches(3, 2.5)
+    X_by_drug_plot[0].show()
+    X_by_drug_plot[0].savefig(fig1_dir/f'X_by_drug.svg')
 
-            [rare_freq_diff_plot[1][i].axvspan(t, t + 0.15, fc='grey', alpha=0.1) for t in np.arange(0, 1, 0.25)]
-            rare_freq_diff_plot[1][i].set_title(f'{sess_type} sessions')
-            rare_freq_diff_plot[1][i].axhline(0, color='k', ls='--')
-            rare_freq_diff_plot[1][i].axvline(0, color='k', ls='--')
+    rare_freq_diff_plot = plt.subplots(ncols=len(drug_sess_dict), sharey='row', figsize=(12, 5))
+    load_diff_data = True
+    musc_figdir = ceph_dir / 'Dammy' / 'figures' / 'figure_muscimol_v2'
+    if not load_diff_data:
+        for i, sess_type in enumerate(['none', 'saline', 'muscimol']):
+            for event, event_response_tag, col in zip(['Pattern', 'X'], ['A_by_cond', 'X_by_cond'], ['g', 'b']):
+                event_response = event_dfs_dict[event_response_tag]
+                response_diff = plot_pupil_diff_across_sessions(['rare', 'frequent'], event_response, [sess_type],
+                                                                drug_sess_dict,
+                                                                plot=[rare_freq_diff_plot[0], rare_freq_diff_plot[1][i]],
+                                                                plt_kwargs=dict(c=col, label=event))
+
+                [rare_freq_diff_plot[1][i].axvspan(t, t + 0.15, fc='grey', alpha=0.1) for t in np.arange(0, 1, 0.25)]
+                rare_freq_diff_plot[1][i].set_title(f'{sess_type} sessions')
+                rare_freq_diff_plot[1][i].axhline(0, color='k', ls='--')
+                rare_freq_diff_plot[1][i].axvline(0, color='k', ls='--')
+
+
 
             # # by animal
             # sess_by_animal = [[sess for sess in response_diff.index.get_level_values('sess') if animal in sess]
@@ -145,13 +179,41 @@ if '__main__' == __name__:
 
     rare_freq_diff_plot[0].savefig(fig1_dir / f'rare_vs_frequent_pupil_diff_across_sessions_all_cohorts.svg')
 
+    max_diff_by_drug = {}
+    rare_freq_diff_by_drug = {}
+    if not load_diff_data:
+        for i, (sess_type, col) in enumerate(zip(['none', 'saline', 'muscimol'], ['dimgray', 'darkblue', 'darkred'])):
+            response_diff = plot_pupil_diff_across_sessions(['rare', 'frequent'], event_dfs_dict['A_by_cond'],
+                                                            [sess_type],
+                                                            drug_sess_dict,
+                                                            plt_kwargs=dict(c=col, label=sess_type))
+            rare_freq_diff_by_drug[sess_type] = response_diff
+    else:
+        diff_data_pkl_dir = ceph_dir / posix_from_win(r'X:\Dammy\figures\figure_muscimol')
+        delta_pkls_by_cohort = [pd.read_pickle(pkl_file) for pkl_file in diff_data_pkl_dir.glob('*rare_freq_delta.pkl')]
+        [rare_freq_diff_by_drug.update({drug: pd.concat([cohort[drug] for cohort in delta_pkls_by_cohort], axis=0)})
+         for drug in ['muscimol','saline','none']]
     rare_freq_diff_all_drugs = plt.subplots()
-    max_diff_by_drug = []
-    for i, (sess_type, col) in enumerate(zip(['none', 'saline', 'muscimol'], ['dimgray', 'darkblue', 'darkred'])):
-        response_diff = plot_pupil_diff_across_sessions(['rare', 'frequent'], event_dfs_dict['A_by_cond'], [sess_type],
-                                                        drug_sess_dict,plot=rare_freq_diff_all_drugs,
-                                                        plt_kwargs=dict(c=col, label=sess_type))
-        max_diff_by_drug.append(response_diff.loc[:,1.75:2.25].max(axis=1))
+    drug_line_cols = {'muscimol':'darkred','saline':'darkblue','none':'dimgray'}
+    for i, drug in enumerate(['none','saline','muscimol']):
+        # smooothed_response = pd.DataFrame(savgol_filter(rare_freq_diff_by_drug[drug], 50,2), columns=rare_freq_diff_by_drug[drug].columns)
+        # smooothed_response = rare_freq_diff_by_drug[drug].T.rolling(25).mean().T
+        smooothed_response = rare_freq_diff_by_drug[drug]
+        rare_freq_diff_all_drugs[1].plot(rare_freq_diff_by_drug[drug].columns,smooothed_response.mean(axis=0),
+                                         label=drug, color=drug_line_cols[drug])
+        rare_freq_diff_all_drugs[1].fill_between(rare_freq_diff_by_drug[drug].columns,
+                                                 smooothed_response.mean(axis=0) - smooothed_response.sem(axis=0),
+                                                 smooothed_response.mean(axis=0) + smooothed_response.sem(axis=0),
+                                                 fc=drug_line_cols[drug],alpha=0.1)
+        # max_diff_by_drug[drug] = rare_freq_diff_by_drug[drug].loc[:,2:2.5].quantile(0.999,axis=1)
+        max_diff_by_drug[drug] = rare_freq_diff_by_drug[drug].loc[:,1.75:2.25].mean(axis=1)
+    # rare_freq_diff_all_drugs = plt.subplots()
+
+    # for i, (sess_type, col) in enumerate(zip(['none', 'saline', 'muscimol'], ['dimgray', 'darkblue', 'darkred'])):
+    #     response_diff = plot_pupil_diff_across_sessions(['rare', 'frequent'], event_dfs_dict['A_by_cond'], [sess_type],
+    #                                                     drug_sess_dict,plot=rare_freq_diff_all_drugs,
+    #                                                     plt_kwargs=dict(c=col, label=sess_type))
+    #     max_diff_by_drug.append(response_diff.loc[:,1.75:2.25].max(axis=1))
 
     rare_freq_diff_all_drugs[1].set_title(f'Pupil difference between rare and frequent')
     rare_freq_diff_all_drugs[1].set_xlabel(f'Time from pattern onset (s)')
@@ -166,25 +228,40 @@ if '__main__' == __name__:
     rare_freq_diff_all_drugs[0].set_size_inches(8, 6)
     rare_freq_diff_all_drugs[0].show()
     rare_freq_diff_all_drugs[0].savefig(
-        fig1_dir / f'rare_vs_frequent_2A_pupil_diff_across_sessions_all_drugs_all_cohorts.svg')
+        musc_figdir / f'rare_vs_frequent_2A_pupil_diff_across_sessions_all_drugs_all_cohorts.svg')
 
     # plot max diff over window by sessions
     max_diff_plot = plt.subplots()
-    bxplot = max_diff_plot[1].boxplot([drug_max_diff for drug_max_diff in max_diff_by_drug],
-                                      labels=['none','saline','muscimol'],
-                                      showmeans=False, showfliers=False)
+    # bxplot = max_diff_plot[1].boxplot([drug_max_diff for drug_max_diff in max_diff_by_drug],
+    #                                   labels=['none','saline','muscimol'],
+    #                                   showmeans=False, showfliers=False)
+    bxplot = max_diff_plot[1].boxplot(list(max_diff_by_drug.values()),
+                                      labels=list(max_diff_by_drug.keys()),
+                                      showmeans=True, showfliers=False)
     for patch, color in zip(bxplot['boxes'], ['dimgray', 'darkblue', 'darkred']):
         patch.set_facecolor(color)
     max_diff_plot[1].set_ylabel('Max pupil difference\n between rare and frequent')
     max_diff_plot[1].locator_params(axis='y', nbins=4)
     max_diff_plot[0].set_layout_engine('tight')
     max_diff_plot[0].show()
-    max_diff_plot[0].savefig(fig1_dir / f'max_diff_boxplot_rare_vs_frequent_pupil_diff_across_sessions_all_drugs.svg')
-    [print(len(drug_max_diff)) for drug_max_diff in max_diff_by_drug]
+    max_diff_plot[0].savefig(musc_figdir / f'max_diff_boxplot_rare_vs_frequent_pupil_diff_across_sessions_all_drugs.svg')
+    [print(len(drug_max_diff)) for drug_max_diff in max_diff_by_drug.values()]
+    drugs = list(max_diff_by_drug.keys())
     [print(ttest_ind(max_diff_by_drug[i].values, max_diff_by_drug[j].values,equal_var=False,alternative='two-sided',
-                     trim=0.2))
-     for i, j in list(combinations(range(3), 2))]
+                     ))
+     for i, j in list(combinations(drugs, 2))]
 
+    # max diff by animal
+    max_diff_by_drug_df = pd.DataFrame(max_diff_by_drug)
+    max_diff_by_drug_df['name'] = max_diff_by_drug_df.index.to_series().str.split('_').str[0]
 
-
+    max_diff_by_animal_plot = plt.subplots()
+    for drug, col in zip(drugs, ['dimgray', 'darkblue', 'darkred']):
+        [max_diff_by_animal_plot[1].plot(max_diff_by_drug_df.query('name == @name').mean(axis=0)[['none', 'saline', 'muscimol']],
+                                         c='lightgrey', lw=0.5)
+                                         for name in max_diff_by_drug_df['name'].unique()]
+        max_diff_by_animal_plot[1].scatter(max_diff_by_drug_df[max_diff_by_drug_df['name'] == drug].index,
+                                            max_diff_by_drug_df[max_diff_by_drug_df['name'] == drug].values, c=col)
+    max_diff_by_animal_plot[1].set_ylabel('Max pupil difference\n between rare and frequent')
+    max_diff_by_animal_plot[0].show()
 

@@ -1,14 +1,20 @@
 import matplotlib.pyplot as plt
+import matplotlib
+# matplotlib.use('TkAgg')
 import neo
 import numpy as np
 import pandas as pd
 from matplotlib import animation
+from sklearn.feature_selection import mutual_info_regression
+from sklearn.neighbors import KernelDensity
+
 from ephys_analysis_funcs import *
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import euclidean
-from scipy.stats import bootstrap
+from scipy.stats import norm
+from scipy.stats import bootstrap, entropy
 import argparse
 import yaml
 import platform
@@ -25,6 +31,7 @@ import quantities as pq
 from IPython.display import HTML
 from IPython import display
 from neural_similarity_funcs import compare_pip_sims_2way,plot_similarity_mat
+# from npeet import entropy_estimators as ee
 
 
 def get_event_response(event_response_dict, event):
@@ -116,6 +123,12 @@ def plot_pca_ts(X_proj_by_event, events, window, plot=None, n_components=3,plot_
         fig,axes = plot
 
     x_ser = np.linspace(window[0], window[1], X_proj_by_event[0][0].shape[-1])
+    # smooth
+    if plot_kwargs.get('smoothing', None):
+        smoothing = plot_kwargs.get('smoothing')
+        for ei, event in enumerate(events):
+            for comp in range(n_components):
+                X_proj_by_event[ei][comp] = gaussian_filter1d(X_proj_by_event[ei][comp], smoothing)
 
     for comp in range(n_components):
         ax = axes[comp]
@@ -128,11 +141,11 @@ def plot_pca_ts(X_proj_by_event, events, window, plot=None, n_components=3,plot_
                 projected_trials_comp = projected_trials[comp]
                 pc_mean_ts = projected_trials_comp
             kwargs2use = plot_kwargs if plot_kwargs is not None else {}
-            if plot_kwargs.get('ls'):
+            if plot_kwargs.get('ls',{}):
                 if isinstance(plot_kwargs.get('ls'),list):
-                    kwargs2use['ls']=plot_kwargs.get('ls')[ei]
+                    kwargs2use['ls']=plot_kwargs.get('ls',{})[ei]
                 else:
-                    kwargs2use['ls']=plot_kwargs.get('ls')
+                    kwargs2use['ls']=plot_kwargs.get('ls',{})
             if plot_kwargs.get('c'):
                 if isinstance(plot_kwargs.get('c'),list):
                     kwargs2use['c']=plot_kwargs.get('c')[ei]
@@ -215,6 +228,52 @@ def style_3d_ax(ax):
     ax.set_zlabel('PC 3')
 
 
+def compute_mi(x,cond_responses_by_prop: list | dict |np.ndarray,
+               bins:np.ndarray):
+
+    p_x, _ = np.histogram(x, density=True, bins=bins)
+    p_x = p_x[p_x > 0]
+    p_x = p_x / p_x.sum()
+
+    # entropy_x = entropy(x)
+    entropy_x = -(p_x * np.log2(p_x)).sum()
+    # entropy_x = -np.sum(p_x*np.log2(p_x +1e-5))
+    # print(entropy_x)
+    assert entropy_x >= 0, f'{entropy_x = } {p_x = }'
+    entropy_x_given_y_vals = []
+    p_y = np.array([len(cur_list) for cur_list in cond_responses_by_prop[0]])
+    p_y  = p_y / np.sum(p_y)
+    print(f'{p_y = }')
+    for cond_responses in cond_responses_by_prop:
+        x_given_y = np.hstack(cond_responses)
+        # get kde of x_given_y
+        # model = KernelDensity()
+        # model.fit(x_given_y.reshape(-1, 1))
+        # probabilities = model.score_samples(np.linspace(bins.min(), bins.max(), len(bins)).reshape(-1, 1))
+        # probabilities = np.exp(probabilities)
+        # p_x_given_y = probabilities[probabilities > 0.0]
+        p_x_given_y, _ = np.histogram(x_given_y, density=True, bins=bins)
+        p_x_given_y = p_x_given_y[p_x_given_y > 0]
+        p_x_given_y = p_x_given_y/p_x_given_y.sum()
+        p_x_given_y = p_x_given_y / p_x_given_y.sum()
+        print(p_x_given_y)
+        # p_x_given_y = p_x_given_y[p_x_given_y > 0]
+        # [print(e.max()) for e in cond_responses]
+        # p_x_given_y, _ = np.histogram(x_given_y[x_given_y>0], density=True, bins=bins)
+        # p_x_given_y = p_x_given_y[p_x_given_y > 0]
+        # entropy_x_given_y_vals += [entropy(np.hstack(cond_responses))]
+        entropy_x_given_y_vals += [-np.sum(p_x_given_y* np.log(p_x_given_y))]
+    assert ((entropy_x - np.array(entropy_x_given_y_vals) @ p_y) < 0).sum() == 0, f'{entropy_x = } {entropy_x_given_y_vals = }'
+    return entropy_x - np.array(entropy_x_given_y_vals) @ p_y
+    # return np.mean(mis_by_prop)
+    #
+    # for j in range(len_abs):  # loop over different rules
+    #     # p_x_given_y is the distribution of responses to stimuli following rule y
+    #     p_x_given_y, _ = np.histogram(y_h_trials_one[:, j, :, t, i], density=True, bins=bins)
+    #     entropy_x_given_y_vals += [
+    #         - np.sum(dx * p_x_given_y * np.log2(p_x_given_y + 1e-9))]  # entropy for a single rule
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file')
@@ -265,8 +324,11 @@ if __name__ == '__main__':
 
         all_events = [e for e in sessions[sessname].sound_event_dict.keys() if any(pip in e for pip in ['A','B','C','D'])]
         event_psth_dict = {e: get_predictor_from_psth(sessions[sessname], e, [-2,3], window,mean=None,
-                                                      use_unit_zscore=True, use_iti_zscore=False,baseline=0.25)
+                                                      use_unit_zscore=True, use_iti_zscore=False,baseline=0)
                            for e in all_events}
+        full_event_psth_dict = {e: get_predictor_from_psth(sessions[sessname], e, [-2, 3], [0,1], mean=None,
+                                                           use_unit_zscore=True, use_iti_zscore=False, baseline=0)
+                                for e in [f'A-{i}' for i in range(4)]}
         _all_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
                        for e in all_events]
         event_psth_dict['full_normal'] = get_predictor_from_psth(sessions[sessname], 'A-0',[-2,3], [-0.1,1], mean=None,
@@ -294,55 +356,55 @@ if __name__ == '__main__':
         pca_ts_plot = plt.subplots(4,n_comp_toplot,figsize=[100,15],squeeze=False)
         rules = ['ABCD 0','ABBA 0','ABCD 1','ABBA 1','ABCD 2','ABBA 2']
         pca_scatter_plot = plt.subplots(ncols=3,figsize=[15,5])
-        for ii,pip in enumerate(['A','B','C','D']):
-            events = [e for e in all_events if e[0] == pip]
-            # for event in events:
-            #
-            #     event_psth_dict[event] = get_predictor_from_psth(sessions[sessname], event, [-2,3], window,mean=None,
-            #                                                      use_unit_zscore=False, use_iti_zscore=False)
-            # Xa_trial_averaged = np.hstack([event_psth_dict[e].mean(axis=0) for e in events])
-            # x_shape = event_psth_dict[events[0]].shape
-            # eig_vals = compute_eig_vals(Xa_trial_averaged,plot_flag=True)
-            # Xa_trial_averaged_pca = compute_trial_averaged_pca(Xa_trial_averaged,n_components=15,standardise=standardise_flag)
-            # projected_trials_by_event = [[project_pca(trial,Xa_trial_averaged_pca,standardise=standardise_flag)
-            #                               for trial in trials_by_event] for trials_by_event in event_psth_dict.values()]
-            # plot_pca_ts(projected_trials_by_event,events,window,n_components=8,plot=[pca_ts_plot[0], pca_ts_plot[1][ii]])
-
-            # _all_trials = [np.array_split(event_psth_dict[e],event_psth_dict[e].shape[0],axis=0) for e in events]
-            # _all_trials = [[np.squeeze(ee) for ee in e] for e in _all_trials]
-            # Xa_trial_concatenated = np.hstack(sum(_all_trials,[]))
-
-            # eig_vals = compute_eig_vals(Xa_trial_concatenated,plot_flag=True)
-            # Xa_trial_concatenated_pca = compute_trial_averaged_pca(Xa_trial_concatenated,n_components=15,standardise=standardise_flag)
-
-            # event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-            #                 for e in events]
-            event_trials = [get_event_response(event_psth_dict,event) for event in events]
-
-            # event_trials = _all_trials
-            projected_trials_by_event = [[project_pca(trial,Xa_trial_concatenated_pca,standardise=standardise_flag)
-                                          for trial in trials_by_event] for trials_by_event in event_trials]
-            # projected_trials_by_event = [project_pca(trial, Xa_trial_averaged_pca, standardise=standardise_flag)
-            #                               for trial in Xa_trial_averaged]
-            plot_pca_ts(projected_trials_by_event,events,window,n_components=n_comp_toplot,plot=[pca_ts_plot[0], pca_ts_plot[1][ii]])
-
-            [[ax.axvline(t, ls='--', c='k') for t in np.arange(0,min([1,window[1]]),0.25)]
-             for ax in pca_ts_plot[1][ii]]
-
-            [[pca_scatter_plot[1][ci].scatter(np.array(proj)[:,comps[0],timepoints[-1]],
-                                              np.array(proj)[:,comps[1],timepoints[-1]],
-                                         c=f'C{ii}',label=pip,alpha=0.25,marker='o')
-             for ti,proj in enumerate(projected_trials_by_event)] for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
-            [(pca_scatter_plot[1][ci].set_xlabel(f'PC{comps[0]}'), pca_scatter_plot[1][ci].set_ylabel(f'PC{comps[1]}'))
-             for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
-            # pca_ts_plot[1][ii]
-        # pca_ts_plot[0].set_layout_engine('constrained')
-        pca_ts_plot[0].show()
-        pca_ts_plot[0].savefig(figdir/f'pca_ts_{sessname}.svg')
-        unique_legend(pca_scatter_plot[1],)
-        pca_scatter_plot[0].savefig(figdir/f'pca_scatter_{sessname}.svg')
-        # pca_scatter_plot[1][-1].legend(ncols=len(rules))
-        pca_scatter_plot[0].show()
+        # for ii,pip in enumerate(['A','B','C','D']):
+        #     events = [e for e in all_events if e[0] == pip]
+        #     # for event in events:
+        #     #
+        #     #     event_psth_dict[event] = get_predictor_from_psth(sessions[sessname], event, [-2,3], window,mean=None,
+        #     #                                                      use_unit_zscore=False, use_iti_zscore=False)
+        #     # Xa_trial_averaged = np.hstack([event_psth_dict[e].mean(axis=0) for e in events])
+        #     # x_shape = event_psth_dict[events[0]].shape
+        #     # eig_vals = compute_eig_vals(Xa_trial_averaged,plot_flag=True)
+        #     # Xa_trial_averaged_pca = compute_trial_averaged_pca(Xa_trial_averaged,n_components=15,standardise=standardise_flag)
+        #     # projected_trials_by_event = [[project_pca(trial,Xa_trial_averaged_pca,standardise=standardise_flag)
+        #     #                               for trial in trials_by_event] for trials_by_event in event_psth_dict.values()]
+        #     # plot_pca_ts(projected_trials_by_event,events,window,n_components=8,plot=[pca_ts_plot[0], pca_ts_plot[1][ii]])
+        #
+        #     # _all_trials = [np.array_split(event_psth_dict[e],event_psth_dict[e].shape[0],axis=0) for e in events]
+        #     # _all_trials = [[np.squeeze(ee) for ee in e] for e in _all_trials]
+        #     # Xa_trial_concatenated = np.hstack(sum(_all_trials,[]))
+        #
+        #     # eig_vals = compute_eig_vals(Xa_trial_concatenated,plot_flag=True)
+        #     # Xa_trial_concatenated_pca = compute_trial_averaged_pca(Xa_trial_concatenated,n_components=15,standardise=standardise_flag)
+        #
+        #     # event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
+        #     #                 for e in events]
+        #     event_trials = [get_event_response(event_psth_dict,event) for event in events]
+        #
+        #     # event_trials = _all_trials
+        #     projected_trials_by_event = [[project_pca(trial,Xa_trial_concatenated_pca,standardise=standardise_flag)
+        #                                   for trial in trials_by_event] for trials_by_event in event_trials]
+        #     # projected_trials_by_event = [project_pca(trial, Xa_trial_averaged_pca, standardise=standardise_flag)
+        #     #                               for trial in Xa_trial_averaged]
+        #     plot_pca_ts(projected_trials_by_event,events,window,n_components=n_comp_toplot,plot=[pca_ts_plot[0], pca_ts_plot[1][ii]],ls={})
+        #
+        #     [[ax.axvline(t, ls='--', c='k') for t in np.arange(0,min([1,window[1]]),0.25)]
+        #      for ax in pca_ts_plot[1][ii]]
+        #
+        #     [[pca_scatter_plot[1][ci].scatter(np.array(proj)[:,comps[0],timepoints[-1]],
+        #                                       np.array(proj)[:,comps[1],timepoints[-1]],
+        #                                  c=f'C{ii}',label=pip,alpha=0.25,marker='o')
+        #      for ti,proj in enumerate(projected_trials_by_event)] for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
+        #     [(pca_scatter_plot[1][ci].set_xlabel(f'PC{comps[0]}'), pca_scatter_plot[1][ci].set_ylabel(f'PC{comps[1]}'))
+        #      for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
+        #     # pca_ts_plot[1][ii]
+        # # pca_ts_plot[0].set_layout_engine('constrained')
+        # pca_ts_plot[0].show()
+        # pca_ts_plot[0].savefig(figdir/f'pca_ts_{sessname}.pdf')
+        # unique_legend(pca_scatter_plot[1],)
+        # pca_scatter_plot[0].savefig(figdir/f'pca_scatter_{sessname}.pdf')
+        # # pca_scatter_plot[1][-1].legend(ncols=len(rules))
+        # pca_scatter_plot[0].show()
 
         # prepare trial averages
         # pick the components corresponding to the x, y, and z axes
@@ -363,14 +425,30 @@ if __name__ == '__main__':
         # set up a figure with two 3d subplots, so we can have two different views
 
         fig,axes = plt.subplots(ncols=2, figsize=[9, 4],subplot_kw={'projection': '3d'})
-        for ii,pip in enumerate(['A','B','C','D','base']):
+        pca_point_plot = plt.subplots(ncols=1, figsize=[9, 4],subplot_kw={'projection': '3d'})
+        pca_point_plot_slice_plot = plt.subplots(ncols=3)
+        # for ii,pip in enumerate(['A','B','C','D','base'][:1]):
+        #     events = [e for e in event_psth_dict if pip in e]
+        for ii, pip in enumerate([f'A-{i}' for i in range(4)]):
             events = [e for e in event_psth_dict if pip in e]
 
             # event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
             #                 for e in events]
-            event_trials = [get_event_response(event_psth_dict, event) for event in events]
+            event_trials = [get_event_response(full_event_psth_dict, event) for event in events]
             projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=standardise_flag)
                                           for trial in trials_by_event] for trials_by_event in event_trials]
+            project_trials_arr = np.array(projected_trials_by_event)[0]
+            # pca_point_plot[1].scatter(project_trials_arr[:,0,0],project_trials_arr[:,1,0],project_trials_arr[:,2,0],
+            #                           c=f'C{ii}',alpha=0.25,marker='o')
+            pca_point_plot[1].scatter(project_trials_arr[:, 0, -1], project_trials_arr[:, 1, -1],
+                                      project_trials_arr[:, 2, -1],
+                                      c=f'C{ii}', alpha=0.5, marker='x')
+            [ax.scatter(project_trials_arr[:, pc[0], -1],project_trials_arr[:, pc[1], -1],
+                        c=f'C{ii}',alpha=0.5,marker='x') for
+             pc,ax in zip(list(combinations(range(3),2)),pca_point_plot_slice_plot[1])]
+            # [ax.scatter(project_trials_arr[:, pc[0], 0],project_trials_arr[:, pc[1], -1],
+            #             c=f'C{ii}',alpha=0.5,marker='o') for
+            #  pc,ax in zip(list(combinations(range(3),2)),pca_point_plot_slice_plot[1])]
             for ax in axes:
                 for t, t_type in enumerate(projected_trials_by_event):
                     proj_arr = np.array(t_type).mean(axis=0)
@@ -380,35 +458,41 @@ if __name__ == '__main__':
                     y = proj_arr[component_y]
                     z = proj_arr[component_z]
 
-                    # apply some smoothing to the trajectories
+
+                    # # apply some smoothing to the trajectories
                     x = gaussian_filter1d(x, sigma=sigma)
                     y = gaussian_filter1d(y, sigma=sigma)
                     z = gaussian_filter1d(z, sigma=sigma)
 
                     # use the mask to plot stimulus and pre/post stimulus separately
                     z_stim = z.copy()
-                    z_stim[~stim_mask] = np.nan
+                    # z_stim[~stim_mask] = np.nan
                     z_prepost = z.copy()
-                    z_prepost[stim_mask] = np.nan
+                    # z_prepost[stim_mask] = np.nan
 
-                    ax.plot(x, y, z_stim, c=f'C{ii}')
+                    ax.plot(x, y, z_stim, c=f'C{ii}',ls='-' if 'A' in pip else '--')
                     ax.plot(x, y, z_prepost, c=f'C{ii}', ls=':')
 
                     # plot dots at initial point
                     ax.scatter(x[0], y[0], z[0], c=f'C{ii}', s=14,label=pip)
+                    ax.scatter(x[-1], y[-1], z[-1], c=f'C{ii}', s=14,label=pip,marker='x')
 
                     # make the axes a bit cleaner
                     style_3d_ax(ax)
+                    style_3d_ax(pca_point_plot[1])
 
             # specify the orientation of the 3d plot
             axes[0].view_init(elev=22, azim=30)
+            pca_point_plot[1].view_init(elev=22, azim=30)
             # axes[0].set_title(f'{pip} 3D view')
-            axes[1].view_init(elev=22, azim=110)
+            # axes[1].view_init(elev=22, azim=110)
         axes[-1].legend()
         plt.tight_layout()
 
         fig.show()
-        fig.savefig(figdir/f'pca_3d_{sessname}.svg')
+        pca_point_plot[0].show()
+        pca_point_plot_slice_plot[0].show()
+        fig.savefig(figdir/f'pca_3d_{sessname}.pdf')
 
         # for ii, pip in enumerate(['A', 'B', 'C', 'D']):
         pip = 'A'
@@ -486,14 +570,14 @@ if __name__ == '__main__':
         pca_traj_plot[0].tight_layout(rect=[0, 0, 0.9, 1])
 
         pca_traj_plot[0].show()
-        pca_traj_plot[0].savefig(figdir/f'pca_trajs_{sessname}.svg')
+        pca_traj_plot[0].savefig(figdir/f'pca_trajs_{sessname}.pdf')
 
         style_3d_ax(pca_traj_plot_3d[1])
         pca_traj_plot_3d[0].legend(loc='upper right')
         pca_traj_plot_3d[0].tight_layout(rect=[0, 0, 0.9, 1])
 
         pca_traj_plot_3d[0].show()
-        pca_traj_plot_3d[0].savefig(figdir/f'pca_trajs_3d_{sessname}.svg')
+        pca_traj_plot_3d[0].savefig(figdir/f'pca_trajs_3d_{sessname}.pdf')
 
         if plot_dist_metrics:
             if 3 in sessions[sessname].td_df['Stage'].values:
@@ -525,7 +609,7 @@ if __name__ == '__main__':
             by_cond_sim_ts_plot[1].set_title(f'{"vs ".join(cond_lbls)} response similarity')
             by_cond_sim_ts_plot[0].legend()
             by_cond_sim_ts_plot[0].show()
-            by_cond_sim_ts_plot[0].savefig(figdir/f'{"vs".join(cond_lbls)}_sim_ts_{sessname}.svg')
+            by_cond_sim_ts_plot[0].savefig(figdir/f'{"vs".join(cond_lbls)}_sim_ts_{sessname}.pdf')
 
             projected_pattern_pc_means = [[ee.mean(axis=0) for ee in e] for e in projected_pattern_pc123]  # need to take mean of each event by cond
             projection_distance_ts = [euclidean(np.array(projected_pattern_pc_means[0])[:, t],
@@ -538,7 +622,7 @@ if __name__ == '__main__':
             pca_euc_dist_plot[1].set_xlabel('Time (s)')
             pca_euc_dist_plot[1].set_title('Pattern response')
             pca_euc_dist_plot[0].show()
-            pca_euc_dist_plot[0].savefig(figdir/f'pca_euc_dist_{sessname}.svg')
+            pca_euc_dist_plot[0].savefig(figdir/f'pca_euc_dist_{sessname}.pdf')
 
 
 

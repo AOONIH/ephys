@@ -36,9 +36,9 @@ if __name__ == '__main__':
     # ephys_dir = ceph_dir / posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\rawdata')
     assert ephys_dir.is_dir()
 
-    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
+    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_ephys_2401.csv')
     session_topology = pd.read_csv(sess_topology_path)
-    # si.set_global_job_kwargs(n_jobs=os.cpu_count()-1)
+    si.set_global_job_kwargs(n_jobs=os.cpu_count()-2)
 
     for sess_name in sess_names:
         name, date = args.sess_dates.split('_')

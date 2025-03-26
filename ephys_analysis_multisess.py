@@ -1,3 +1,4 @@
+from behviour_analysis_funcs import get_all_cond_filts
 from ephys_analysis_funcs import *
 import platform
 import argparse
@@ -21,6 +22,7 @@ if __name__ == "__main__":
     parser.add_argument('--sess_top_filts', default='')
     parser.add_argument('--synth_data',default=0,type=int)
     parser.add_argument('--rel_sorting_path',default='')
+    parser.add_argument('--ow',default=1)
 
     args = parser.parse_args()
     print(f'{args = }')
@@ -32,7 +34,7 @@ if __name__ == "__main__":
 
     plt.ioff()
     # try: gen_metadata(ceph_dir/posix_from_win(r'X:\Dammy\ephys\session_topology.csv'),ceph_dir,ceph_dir/'Dammy'/'harpbins')
-    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
+    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_ephys_2401.csv')
     # try: gen_metadata(sess_topology_path,ceph_dir,
     #                   col_name='beh_bin',harp_bin_dir='')
     # except OSError: pass
@@ -78,11 +80,10 @@ if __name__ == "__main__":
     main_patterns = get_main_sess_patterns(name, date, main_sess_td_name, home_dir)
     normal_patterns = [pattern for pattern in main_patterns if np.all(np.diff(pattern)>0)]
     non_normal_patterns = [pattern for pattern in main_patterns if not np.all(np.diff(pattern)>0)]
-    if non_normal_patterns:
-        main_patterns = list(sum(zip(normal_patterns,non_normal_patterns),()))
-    else:
-        main_patterns = normal_patterns
-    print(f'{main_patterns=}')
+    # if non_normal_patterns:
+    #     main_patterns = list(sum(zip(normal_patterns,non_normal_patterns),()))
+    # else:
+    #     main_patterns = normal_patterns
     n_patts_per_rule = int(len(main_patterns)/ len(normal_patterns))
 
     main_pattern = main_patterns[0]
@@ -90,6 +91,8 @@ if __name__ == "__main__":
 
     plot_psth_decode = False
     decode_over_time = False
+
+    cond_filters = get_all_cond_filts()
 
     for (_,sess_info),spike_dir in zip(all_sess_info.iterrows(), sort_dirs):
         if sess_info['sess_order'] != 'main':
@@ -112,7 +115,7 @@ if __name__ == "__main__":
 
         sess_pkl_path = pkl_dir / f'{sessname}.pkl'
 
-        if sess_pkl_path.is_file():
+        if sess_pkl_path.is_file() and not args.ow:
             print(f'found {sess_pkl_path.name}, loading')
             sessions[sessname] = load_sess_pkl(sess_pkl_path)
             print(f'loaded {sess_pkl_path.name}')
@@ -129,6 +132,25 @@ if __name__ == "__main__":
 
             sessions[sessname].load_trial_data(get_main_sess_td_df(name,date,main_sess_td_name,home_dir)[1])
             # normal = sessions[sessname].td_df[sessions[sessname].td_df['Tone_Position'] == 0]['PatternID'].iloc[0]
+
+            if sessions[sessname].td_df['Stage'].iloc[0] <=2:
+                print('stage 2, nothing to analyse')
+                continue
+            main_patterns = get_main_sess_patterns(td_df=sessions[sessname].td_df)
+            main_patterns = sorted(main_patterns, key=lambda x: (x[0], np.any(np.diff(x)<=0)))
+            print(f'{main_patterns=}')
+            if sessions[sessname].td_df['Stage'].iloc[0] ==3:
+                normal_patterns = main_patterns
+                if len(normal_patterns) > 1 and sessions[sessname].td_df['Stage'].iloc[0] == 3:
+                    warnings.warn(f'{sessname} has more than one normal pattern for stage 3')
+            elif sessions[sessname].td_df['Stage'].iloc[0] == 4:
+                normal_patterns = get_main_sess_patterns(
+                    td_df=sessions[sessname].td_df.query(cond_filters['normal_exp']))
+            elif sessions[sessname].td_df['Stage'].iloc[0] == 5:
+                normal_patterns = [pattern for pattern in main_patterns if np.all(np.diff(pattern) > 0)]
+            else:
+                continue
+
             normal = main_pattern
             # normal = [int(pip) for pip in normal.split(';')]
             if -1 in sessions[sessname].td_df['Pattern_Type'].unique():
@@ -142,14 +164,14 @@ if __name__ == "__main__":
             normal= main_pattern
             new_normal = None
         sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir)
-        if not sessions[sessname].sound_event_dict:
+        if not sessions[sessname].sound_event_dict or args.ow:
             _parts = sessname.split('_')
             '_'.join([_parts[0],'SoundData',_parts[1]])
             labels = ['A-0', 'B-0', 'C-0', 'D-0', 'X', 'base','newA']
 
             abs_writes_path = str(sound_bin_path.with_stem(f'{sound_bin_path.stem}_write_indices'))
             sessions[sessname].init_sound_event_dict(ceph_dir/posix_from_win(abs_writes_path).with_suffix('.csv'),
-                                                     patterns=main_patterns)
+                                                     patterns=main_patterns,normal_patterns=normal_patterns)
         sessions[sessname].get_event_free_zscore()
         synth_data_flag = args.synth_data if args.synth_data else None
         n_units = len(sessions[sessname].spike_obj.units)
@@ -159,7 +181,7 @@ if __name__ == "__main__":
         pip_idxs = {event_lbl: sessions[sessname].sound_event_dict[event_lbl].idx
                     for event_lbl in sessions[sessname].sound_event_dict
                     if any(char in event_lbl for char in 'ABCD')}
-        pip_desc, pip_lbls, pip_names = get_pip_info(sessions[sessname].sound_event_dict, normal_patterns,
+        pip_desc, pip_lbls, pip_names = get_pip_info(sessions[sessname].sound_event_dict, main_patterns,
                                                      n_patts_per_rule)
         sessions[sessname].pip_desc = pip_desc
         # generate patterned unit rates
@@ -167,6 +189,7 @@ if __name__ == "__main__":
         sessions[sessname].get_sound_psth(psth_window=psth_window, zscore_flag=True, baseline_dur=0, redo_psth=False,
                                           use_iti_zscore=False, synth_data=synth_data_flag)
         sessions[sessname].pickle_obj(pkl_dir)
+        exit()
 
         n_shuffles = 1000
         by_pip_predictors = {}
@@ -302,7 +325,7 @@ if __name__ == "__main__":
 
                 sessions[sessname].init_decoder('X_to_base', np.vstack(preds_sim_over_pips), np.hstack(feats_sim_over_pips))
                 sessions[sessname].run_decoder('X_to_base', ['data','shuffle'], dec_kwargs={'cv_folds': 0},
-                                               plot_flag=True)
+                                               plot_flag=True,)
                 # sessions[sessname].decoders['X_to_base'].accuracy_plot[0].show()
                 sessions[sessname].decoders['X_to_base'].accuracy_plot[0].savefig(ephys_figdir/f'X_to_base_{sessname}.svg')
             # decoder to base
@@ -412,14 +435,14 @@ if __name__ == "__main__":
                 recent_pattern_trials = sessions[sessname].td_df[idx_bool].index.to_numpy()
                 distant_pattern_trials = sessions[sessname].td_df[idx_bool2].index.to_numpy()
 
-                cumsum_plot = plt.subplots()
-                cumsum_plot[1].plot(np.cumsum(idx_bool),label='freq')
-                cumsum_plot[1].plot(np.cumsum(idx_bool2),label='rare')
-                cumsum_plot[1].legend()
-                cumsum_plot[1].set_xlabel('trial number')
-                cumsum_plot[1].set_title('distribution of rare vs freq trials over session')
-                cumsum_plot[0].set_constrained_layout('constrained')
-                cumsum_plot[0].savefig(ephys_figdir/f'02_08_local_rate_cumsum_plot_{sessname}.svg')
+                # cumsum_plot = plt.subplots()
+                # cumsum_plot[1].plot(np.cumsum(idx_bool),label='freq')
+                # cumsum_plot[1].plot(np.cumsum(idx_bool2),label='rare')
+                # cumsum_plot[1].legend()
+                # cumsum_plot[1].set_xlabel('trial number')
+                # cumsum_plot[1].set_title('distribution of rare vs freq trials over session')
+                # cumsum_plot[0].set_constrained_layout('constrained')
+                # cumsum_plot[0].savefig(ephys_figdir/f'02_08_local_rate_cumsum_plot_{sessname}.svg')
 
                 rec_dist_decoder_plot = plt.subplots()
                 # dec_events = ['A-0','B-0','C-0','D-0','A_shuffle','A_halves']
@@ -555,9 +578,10 @@ if __name__ == "__main__":
 
         if sess_info['sess_order'] == 'main' and 4 in sessions[sessname].td_df['Stage'].values:
             new_window = [-1, 2]
-            preds_norm_dev = get_predictor_from_psth(sessions[sessname], 'A-0', psth_window, new_window, mean=None)
-            normal_responses = get_predictor_from_psth(sessions[sessname], 'A-0', psth_window, new_window, mean=None)
-            deviant_responses = get_predictor_from_psth(sessions[sessname], 'A-1', psth_window, new_window, mean=None)
+            preds_norm_dev = get_predictor_from_psth(sessions[sessname], 'A-0', psth_window, new_window, mean=None,baseline=1)
+            normal_responses = get_predictor_from_psth(sessions[sessname], 'A-0', psth_window, new_window, mean=None,baseline=1)
+            deviant_responses = get_predictor_from_psth(sessions[sessname], 'A-1', psth_window, new_window, mean=None,baseline=1)
+            dev_ABBA1_responses = get_predictor_from_psth(sessions[sessname], 'A-2', psth_window, new_window, mean=None,baseline=1)
 
             # new_norm_predictors =
             x_ser = np.linspace(new_window[0], new_window[1], preds_norm_dev.shape[-1])
@@ -567,45 +591,64 @@ if __name__ == "__main__":
             # newnorm_trial_nums = sessions[sessname].td_df.query('(Pattern_Type == -1) & Tone_Position == 0').index.to_numpy()
             predictors_dict = {}
             features_dict = {}
-            pred_names = ['normal','deviant','new_norm']
-            colors = ['saddlebrown','chocolate','darkslategreen']
+            pred_names = ['normal','deviant','dev_ABBA1']
+            colors = ['saddlebrown','chocolate','darkgreen']
             psth_ts_plot=plt.subplots()
-            for di, (name, responses, color) in enumerate(zip(pred_names[:-1],[normal_responses,deviant_responses],colors)):
+            for di, (name, responses, color) in enumerate(zip(pred_names[:],[normal_responses[-20:],deviant_responses,dev_ABBA1_responses],
+                                                              colors)):
                 # idx_bool = np.isin(sessions[sessname].sound_event_dict['A-0'].trial_nums - 1,
                 #                    trial_nums)
                 predictors_dict[name] = responses
                 features_dict[name] = np.full(predictors_dict[name].shape[0],di)
-                if di<2:
+                if di<3:
                     smoothed_data = savgol_filter(predictors_dict[name].mean(axis=0),10,2,axis=1)
                     psth_ts_plot = plot_psth_ts(smoothed_data,x_ser,label=name,plot=psth_ts_plot,c=color)
                     plot_ts_var(x_ser,smoothed_data,color,psth_ts_plot[1])
-                    psth_plot = plot_psth(smoothed_data,'Time since pattern onset (s)',new_window)
+                    # two slope color bar
+                    cmap_norm = TwoSlopeNorm(vmin=smoothed_data.min(), vmax=smoothed_data.max(), vcenter=0)
+                    psth_plot = plot_psth(smoothed_data,'Time since pattern onset (s)',new_window,cmap='bwr',
+                                          norm=cmap_norm)
+                    psth_plot[1].set_title(name)
                     psth_ts_plot[1].legend()
                     [psth_ts_plot[1].axvspan(t,t+0.15,fc='k',alpha=0.1) for t in np.arange(0,1,0.25)]
-                # psth_plot[0].show()
-            psth_ts_plot[0].show()
+                psth_plot[0].show()
             psth_ts_plot[1].tick_params(axis='both', which='major', labelsize=16)
             psth_ts_plot[1].locator_params(axis='both', nbins=4)
+            psth_ts_plot[1].locator_params(axis='both', nbins=4)
             psth_ts_plot[0].set_size_inches(3.5,3)
+            psth_ts_plot[0].show()
             psth_ts_plot[0].savefig(ephys_figdir/f'norm_dev_psth_ts_{sessname}.svg')
 
-            # new_norm_pred = get_predictor_from_psth(sessions[sessname], 'A2', psth_window, new_window, mean=None)
-            # predictors_dict['new_norm'] = new_norm_pred
-            # features_dict['new_norm'] = np.full_like(new_norm_pred.shape[0],2)
-            #
-            # for dev_type in ['deviant','new_norm']:
-            #     norm_dec_diff_mat = plot_psth(predictors_dict[dev_type].mean(axis=0)-predictors_dict['normal'].mean(axis=0),
-            #                                   'Pattern',new_window,cmap='bwr')
-            #     norm_dec_diff_mat[1].axvline(0.5,c='w',ls='--')
-            #     norm_dec_diff_mat[0].show()
-            #
-            #     all_dev_plot = plt.subplots(4,5,figsize=(30,20))
-            #     for i, (trial_response,ax) in enumerate(zip(predictors_dict[dev_type],all_dev_plot[1].flatten())):
-            #         norm_dec_diff_mat = plot_psth(trial_response - predictors_dict['normal'].mean(axis=0),
-            #                                       'Pattern', new_window, cmap='bwr',plot=(all_dev_plot[0],ax),
-            #                                       vmin=-10,vmax=30)
-            #         ax.axvline(0.5, c='w', ls='--')
-            #     all_dev_plot[0].show()
+            for dev_type in pred_names[1:]:
+                response_diff_mat = predictors_dict[dev_type].mean(axis=0)-predictors_dict['normal'][-20:].mean(axis=0)
+                cmap_norm = TwoSlopeNorm(vmin=response_diff_mat.min(), vmax=1.5, vcenter=0)
+                norm_dev_diff_mat = plot_psth(response_diff_mat,'Pattern',new_window,cmap='bwr',norm=cmap_norm)
+                norm_dev_diff_mat[1].axvline(0,c='k',ls='--')
+                norm_dev_diff_mat[1].axvline(0.5,c='k',ls='--')
+                norm_dev_diff_mat[1].set_title(f'{dev_type} - {pred_names[0]}')
+                norm_dev_diff_mat[0].show()
+                norm_dev_diff_mat[0].savefig(ephys_figdir/f'norm_dev_diff_mat_{sessname}_{dev_type}.svg')
+
+            response_diff_mat = predictors_dict['dev_ABBA1'].mean(axis=0) - predictors_dict['deviant'].mean(
+                axis=0)
+            cmap_norm = TwoSlopeNorm(vmin=response_diff_mat.min(), vmax=1.5, vcenter=0)
+            norm_dev_diff_mat = plot_psth(response_diff_mat, 'Pattern', new_window, cmap='bwr', norm=cmap_norm)
+            norm_dev_diff_mat[1].axvline(0, c='k', ls='--')
+            norm_dev_diff_mat[1].axvline(0.5, c='k', ls='--')
+            norm_dev_diff_mat[1].set_title(f'dev_ABBA1 - deviant')
+            norm_dev_diff_mat[0].show()
+            norm_dev_diff_mat[0].savefig(ephys_figdir / f'norm_dev_diff_mat_{sessname}_dev_ABBA1_deviant.svg')
+
+                # all_dev_plot = plt.subplots(4,5,figsize=(30,20))
+                # for i, (trial_response,ax) in enumerate(zip(predictors_dict[dev_type],all_dev_plot[1].flatten())):
+                #     norm_dec_diff_mat = plot_psth(trial_response - predictors_dict['normal'].mean(axis=0),
+                #                                   'Pattern', new_window, cmap='bwr',plot=(all_dev_plot[0],ax),
+                #                                   norm=cmap_norm)
+                #     ax.axvline(0.5, c='w', ls='--')
+                # all_dev_plot[0].show()
+
+            # decode responses
+
 
         # stage5 analysis on representation of rising vs non-rising tones
         if sess_info['sess_order'] == 'main' and 5 in sessions[sessname].td_df['Stage'].values:
@@ -613,7 +656,7 @@ if __name__ == "__main__":
             window = [0, 0.25]
             t4sim = -1
             preds_pips4sim = {event_lbl: get_predictor_from_psth(sessions[sessname], event_lbl, psth_window, window,
-                                                                 mean=None,baseline=0)
+                                                                 mean=None,baseline=0.25)
                               for event_lbl in sessions[sessname].sound_event_dict
                               if any(char in event_lbl for char in 'ABCD')}
 
@@ -769,7 +812,7 @@ if __name__ == "__main__":
             betas_by_units = pd.concat([unit_glm[1].params for unit_glm in glm_by_units],axis=1).T
             glm_pval_plot = plt.subplots(figsize=(12,6))
             [glm_pval_plot[1].scatter(pvals_by_units.index, pvals_by_units[col],c=f'C{ci}',label=col,s=15)
-             for ci,col in enumerate(pvals_by_units.columns)]
+             for ci,col in enumerate(pvals_by_units.columns) if col != 'const']
 
             sig_thresh = 0.05
             glm_pval_plot[1].axhline(sig_thresh,ls='--',c='k')

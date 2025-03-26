@@ -1,4 +1,5 @@
 import platform
+import warnings
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -307,7 +308,8 @@ def load_sound_bin(binpath: Path):
     return all_writes
 
 
-def format_sound_writes(sound_writes_df: pd.DataFrame, patterns: [[int, ], ], ) -> pd.DataFrame:
+def format_sound_writes(sound_writes_df: pd.DataFrame, patterns: [[int, ], ],normal_patterns=None,
+                        ptypes=None ) -> pd.DataFrame:
     # assign sounds to trials
     sound_writes_df = sound_writes_df.drop_duplicates(subset='Timestamp', keep='first').copy()
     sound_writes_df = sound_writes_df.reset_index(drop=True)
@@ -335,30 +337,46 @@ def format_sound_writes(sound_writes_df: pd.DataFrame, patterns: [[int, ], ], ) 
 
     tones = sound_writes_df['Payload'].unique()
     pattern_tones = tones[tones >= 8]
-    base_pip_idx = [e for e in pattern_tones if e not in sum(patterns, [])]
-    if len(base_pip_idx) > 1:
-        base_pip_idx = sound_writes_df.query('Payload in @base_pip_idx')['Payload'].mode().iloc[0]
+    if patterns is not None:
+        base_pip_idx = [e for e in pattern_tones if e not in sum(patterns, [])]
+        if len(base_pip_idx) > 1:
+            base_pip_idx = sound_writes_df.query('Payload in @base_pip_idx')['Payload'].mode().iloc[0]
+        else:
+            base_pip_idx = base_pip_idx[0]
     else:
-        base_pip_idx = base_pip_idx[0]
+        base_pip_idx = sound_writes_df['Payload'].mode().iloc[0]
 
-    normal_patterns = [pattern for pattern in patterns if (np.diff(pattern) > 0).all()]
-    deviant_patterns = [pattern for pattern in patterns if pattern not in normal_patterns]
+    if patterns is None:
+        normal_patterns, deviant_patterns = None, None
+        sound_writes_df['pattern_pips'] = [np.nan]*sound_writes_df.shape[0]
+        sound_writes_df['pattern_start'] = [np.nan]*sound_writes_df.shape[0]
+        sound_writes_df['pip_counter'] = [np.nan]*sound_writes_df.shape[0]
+        sound_writes_df['ptype'] = [np.nan]*sound_writes_df.shape[0]
+    else:
+        if normal_patterns is None:
+            normal_patterns = [pattern for pattern in patterns if (np.diff(pattern) > 0).all()]
+        deviant_patterns = [pattern for pattern in patterns if pattern not in normal_patterns]
 
-    sound_writes_df['pattern_pips'] = sound_writes_df['Payload'].isin(sum(patterns, []))
-    sound_writes_df['pattern_start'] = sound_writes_df['Payload_diff'].isin(np.array(patterns)[:, 0] - base_pip_idx) * \
-                                       sound_writes_df['pattern_pips']
-    sound_writes_df['pip_counter'] = np.zeros_like(sound_writes_df['pattern_start']).astype(int)
-    patterns_presentations = [sound_writes_df.iloc[idx:idx+4]
-                              for idx in sound_writes_df.query('pattern_start == True').index]
-    sound_writes_df['ptype'] = [np.nan]*sound_writes_df.shape[0]
-    for pattern_pres in patterns_presentations:
-        patt = pattern_pres['Payload'].to_list()
-        ptype = 0 if patt in normal_patterns else 1 if patt in deviant_patterns else -1
-        sound_writes_df.loc[pattern_pres.index, 'ptype'] = ptype
+        sound_writes_df['pattern_pips'] = sound_writes_df['Payload'].isin(sum(patterns, []))
+        sound_writes_df['pattern_start'] = sound_writes_df['Payload_diff'].isin(np.array(patterns)[:, 0] - base_pip_idx) * \
+                                           sound_writes_df['pattern_pips']
+        sound_writes_df['pip_counter'] = np.zeros_like(sound_writes_df['pattern_start']).astype(int)
+        patterns_presentations = [sound_writes_df.iloc[idx:idx+4]
+                                  for idx in sound_writes_df.query('pattern_start == True').index
+                                  if base_pip_idx not in sound_writes_df.iloc[idx:idx+4]['Payload'].values
+                                  and 3 not in sound_writes_df.iloc[idx:idx+4]['Payload'].values]
+        sound_writes_df['ptype'] = [np.nan]*sound_writes_df.shape[0]
+        for pattern_pres in patterns_presentations:
+            patt = pattern_pres['Payload'].to_list()
+            if ptypes is not None:
+                ptype = ptypes['_'.join(str(e) for e in patt)]
+            else:
+                ptype = 0 if patt in normal_patterns else 1 if patt in deviant_patterns else -1
+            sound_writes_df.loc[pattern_pres.index, 'ptype'] = ptype
 
-    for i in sound_writes_df.query('pattern_start == True').index:
-        sound_writes_df.loc[i:i + 3, 'pip_counter'] = np.cumsum(sound_writes_df['pattern_pips'].loc[i:i + 3]) \
-                                                      * sound_writes_df['pattern_pips'].loc[i:i + 3]
+        for i in sound_writes_df.query('pattern_start == True').index:
+            sound_writes_df.loc[i:i + 3, 'pip_counter'] = np.cumsum(sound_writes_df['pattern_pips'].loc[i:i + 3]) \
+                                                          * sound_writes_df['pattern_pips'].loc[i:i + 3]
 
     # base_pip_idx = normal[0] - (-2 if (normal[0] - normal[1] > 0) else 2)  # base to pip gap
     # non_base_pips = sound_writes_df.query('Payload > 8 & Payload != @base_pip_idx')['Payload'].unique()
@@ -421,7 +439,7 @@ def point_cloud(x_loc, y_ser, spread=0.1):
     # return np.random.normal(loc=x_loc, scale=spread, size=len(y_ser))
 
 
-def plot_2d_array_with_subplots(array_2d: np.ndarray, cmap='viridis', cbar_width=0.1, cbar_height=0.8, plot_cbar=True,
+def plot_2d_array_with_subplots(array_2d: np.ndarray, cmap='viridis', cbar_width=0.1, cbar_height=0.8,
                                 extent=None, aspect=1.0, vcenter=None, plot=None,
                                 **im_kwargs) -> (plt.Figure, plt.Axes):
     """
@@ -437,6 +455,9 @@ def plot_2d_array_with_subplots(array_2d: np.ndarray, cmap='viridis', cbar_width
     - extent (list or None, optional): The extent (left, right, bottom, top) of the matshow plot.
                                        If None, the default extent is used.
     """
+    plot_cbar = im_kwargs.get('plot_cbar', True)
+    im_kwargs.pop('plot_cbar', None)
+
     # Convert the input array to a NumPy array
     array_2d = np.array(array_2d)
 
@@ -457,7 +478,7 @@ def plot_2d_array_with_subplots(array_2d: np.ndarray, cmap='viridis', cbar_width
 
     # Add a color bar legend using fig.colorbar with explicit width and height
     if plot_cbar:
-        cax = divider.append_axes('right', size='7.5%', pad=0.1)
+        cax = divider.append_axes('right', size='7.5%', pad=0.05)
         cbar = fig.colorbar(im, cax=cax, fraction=cbar_width, aspect=cbar_height, )
     else:
         cbar = None
@@ -547,6 +568,13 @@ class SessionSpikes:
                          window: [list | np.ndarray], get_spike_matrix=True):
         if self.event_cluster_spike_times is None:
             self.event_cluster_spike_times = multiprocessing.Manager().dict()
+
+        # with multiprocessing.Pool() as pool:
+        #     results = pool.map(partial(get_spike_times_in_window,window=window, fs=self.new_fs,
+        #                                spike_time_dict=self.cluster_spike_times_dict),
+        #                        event_times)
+        #     for event_time, val in zip(list(event_times), results):
+        #         self.event_cluster_spike_times[f'{event_name}_{event_time}'] = val
         for event_time in event_times:
             if f'{event_name}_{event_time}' not in list(self.event_cluster_spike_times.keys()):
                 self.event_cluster_spike_times[f'{event_name}_{event_time}'] = get_spike_times_in_window(event_time,
@@ -556,6 +584,14 @@ class SessionSpikes:
             if get_spike_matrix:
                 if self.event_spike_matrices is None:
                     self.event_spike_matrices = multiprocessing.Manager().dict()
+        # with multiprocessing.Pool() as pool:
+        #     results = pool.map(partial(gen_spike_matrix,window=window, fs=self.new_fs),
+        #                        list(self.event_cluster_spike_times.values()))
+        #     for key, val in zip(list(self.event_cluster_spike_times.keys()), results):
+        #         self.event_spike_matrices[key] = val
+                # self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(
+                                        # self.event_cluster_spike_times[f'{event_name}_{event_time}'],
+                                        # window, self.new_fs)
                 if f'{event_name}_{event_time}' not in list(self.event_spike_matrices.keys()):
                     self.event_spike_matrices[f'{event_name}_{event_time}'] = gen_spike_matrix(
                         self.event_cluster_spike_times[f'{event_name}_{event_time}'],
@@ -690,18 +726,64 @@ def get_event_psth(sess_spike_obj: SessionSpikes, event_idx, event_times: [pd.Se
 def plot_psth(psth_rate_mat, event_lbl, window, title='', cbar_label=None, cmap='Reds', **im_kwargs):
     if not cbar_label:
         cbar_label = 'firing rate (Hz)'
+    if not im_kwargs.get('aspect'):
+        im_kwargs['aspect'] = 0.1
     fig, ax, cbar = plot_2d_array_with_subplots(psth_rate_mat, cmap=cmap,
                                                 extent=[window[0], window[1], psth_rate_mat.shape[0], 0],
-                                                cbar_height=50, aspect=0.1, **im_kwargs)
+                                                cbar_height=50, **im_kwargs)
     ax.set_ylabel('unit number', fontsize=14)
     ax.set_xlabel(f'time from {event_lbl} onset (s)', fontsize=14)
     ax.set_title(title)
     if cbar:
-        cbar.ax.set_ylabel(cbar_label, rotation=270, labelpad=5)
+        cbar.ax.set_ylabel(cbar_label, rotation=270, labelpad=15)
     for t in np.arange(0, 1, 1):
         ax.axvline(t, ls='--', c='white', lw=1)
 
     return fig, ax, cbar
+
+
+def plot_sorted_psth(responses_by_sess, pip, sort_pip, window, sort_window, plot=None, sessname_filter=None,
+                     im_kwargs=None,subset=None, plot_ts=True):
+    if isinstance(sessname_filter, str):
+        sessname_filter = [sessname_filter]
+    # [print(sess) for sess in responses_by_sess.keys() if sessname_filter in sess]
+    response_dict = {
+        e: np.concatenate([responses_by_sess[sessname][e].mean(axis=0)
+                           for sessname in responses_by_sess
+                           if (any([e in sessname for e in sessname_filter]) if sessname_filter else True)])
+         for e in [pip, sort_pip]}
+    # print(response_dict.keys())
+    if plot is None:
+        psth_plot = plt.subplots(2, sharex=True, gridspec_kw={'height_ratios': [1, 9], 'hspace': 0.1})
+    else:
+        psth_plot = plot
+
+    resp_mat = response_dict[pip]
+    if resp_mat.ndim == 3:
+        resp_mat = resp_mat.mean(axis=0)
+    x_ser = np.round(np.linspace(*window, resp_mat.shape[-1]), 2)
+    sort_idxs = [np.where(x_ser == t)[0][0] for t in sort_window]
+    print(sort_idxs)
+
+    max_by_row = np.argmax(response_dict[sort_pip][:, sort_idxs[0]:sort_idxs[1]], axis=1)
+    resp_mat_sorted = resp_mat[max_by_row.argsort()]
+    plot_psth(resp_mat_sorted, pip, window, aspect=0.1, plot=(psth_plot[0], psth_plot[1][1] if plot_ts else psth_plot[1]),
+              **im_kwargs if im_kwargs else {})
+
+    if plot_ts:
+        assert len(psth_plot[1]) > 1, 'need psth plot with 2 axes'
+        psth_plot[1][0].plot(x_ser, resp_mat.mean(axis=0), color='k', lw=2)
+        psth_plot[1][0].fill_between(x_ser,
+                                     resp_mat.mean(axis=0) - resp_mat.std(axis=0) / np.sqrt(resp_mat.shape[0]),
+                                     resp_mat.mean(axis=0) + resp_mat.std(axis=0) / np.sqrt(resp_mat.shape[0]),
+                                     color='k', alpha=0.1)
+        # fix positions
+        axs_bbox = [ax.get_position() for ax in psth_plot[1]]
+        og_ts_bbox = [axs_bbox[0].x0, axs_bbox[0].y0, axs_bbox[0].width, axs_bbox[0].height]
+        og_ts_bbox[2] = axs_bbox[0].width * 0.91
+        psth_plot[1][0].set_position(og_ts_bbox)
+    if plot is None:
+        return psth_plot
 
 
 def plot_psth_ts(psth_mat, x_ser, x_lbl='', y_lbl='', title='', plot=None, **plt_kwargs) -> [plt.Figure, plt.Axes]:
@@ -728,6 +810,31 @@ def plot_ts_var(x_ser: np.ndarray | pd.Series, y_ser: np.ndarray | pd.Series, co
                              **ci_kwargs if ci_kwargs else {}).astype(float)
 
     plt_ax.fill_between(x_ser, ci[1], ci[2], alpha=0.1, fc=colour)
+
+
+def format_axis(ax, **kwargs):
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(True)
+    ax.spines['left'].set_visible(True)
+    ax.spines['bottom'].set_color('k')
+    ax.spines['left'].set_color('k')
+    ax.spines['bottom'].set_zorder(1)
+
+    ax.locator_params(axis='both', nbins=kwargs.get('nbins', 4))
+    ax.set_xlabel(kwargs.get('xlabel', ''))
+    ax.set_ylabel(kwargs.get('ylabel', ''))
+
+    if kwargs.get('ylim', None):
+        ax.set_ylim(kwargs.get('ylim'))
+    if kwargs.get('xlim', None):
+        ax.set_xlim(kwargs.get('xlim'))
+
+    [ax.axhline(e, color='k', ls='--',lw=kwargs.get('lw',0.5)) for e in kwargs.get('hlines', []) if kwargs.get('hlines', None)]
+    [ax.axvline(e, color='k', ls='--',lw=kwargs.get('lw',0.5)) for e in kwargs.get('vlines', []) if kwargs.get('vlines', None)]
+
+    [ax.axvspan(*e, color='k', alpha=0.1) for e in kwargs.get('vspan', [[]]) if kwargs.get('vspan', None)]
+    [ax.axhspan(*e, color='k', alpha=0.1) for e in kwargs.get('hspan', [[]]) if kwargs.get('hspan', None)]
 
 
 def mean_confidence_interval(data, confidence=0.95,var_func=np.std):
@@ -821,7 +928,7 @@ class Decoder:
         self.cm_plot = None
         self.prediction_ts = None
 
-    def decode(self, dec_kwargs, parallel_flag=True, **kwargs):
+    def decode(self, dec_kwargs, parallel_flag=False, **kwargs):
         if not dec_kwargs.get('cv_folds', 0):
             n_runs = kwargs.get('n_runs', 500)
         else:
@@ -844,8 +951,8 @@ class Decoder:
                                                  range(n_runs)),
                                     total=n_runs))
         else:
-            results  = [run_decoder(self.predictors, self.features, model=self.model_name, **dec_kwargs)
-                        for i in tqdm(range(n_runs), total=n_runs, desc='Decoding single threaded')]
+            results = [run_decoder(self.predictors, self.features, model=self.model_name, **dec_kwargs)
+                       for _ in tqdm(range(n_runs), total=n_runs, desc='Decoding single threaded',disable=True)]
         # results = []
         # register_at_fork(after_in_child=np.random.seed)
         # with multiprocessing.Pool(initializer=np.random.seed) as pool:
@@ -1035,13 +1142,14 @@ class SessionPupil:
             """
 
         pupil_size = self.pupil_data[size_col]
+        pupil_isout = self.pupil_data['isout']
         start, end = pupil_size.index[0], pupil_size.index[-1]
-        event_trialnums = self.sound_writes.query(f'Payload == {event_idx}')['Trial_Number'].values
         dt = np.round(np.nanmedian(np.diff(pupil_size.index)),2)
         event_tdeltas = np.round(np.arange(window[0], window[1], dt), 2)
 
         sound_df_query = f'Payload == {event_idx} & {sound_df_query}' if sound_df_query else f'Payload == {event_idx}'
         event_times = self.sound_writes.query(sound_df_query)['Timestamp'].values
+        event_trialnums = self.sound_writes.query(sound_df_query)['Trial_Number'].values
         if event_shifts is not None:
             event_times += event_shifts
 
@@ -1049,17 +1157,24 @@ class SessionPupil:
         #                   for eventtime in event_times]
         # aligned_epochs = [pupil_size.loc[eventtime+window[0]: eventtime+window[1]] for eventtime in event_times]
         aligned_epochs = []
+        epoch_isout = []
         for eventtime in event_times:
             try:
                 a = pupil_size.loc[eventtime + window[0]: eventtime + window[1]]
             except KeyError:
-                print(f'{sessname}: {start<eventtime<end= } {eventtime} not found')
+                print(f'{sessname}: {start<eventtime<end= } {eventtime}  {event_name} not found. '
+                      f'Event {np.where(event_times==eventtime)[0][0]+1}/{len(event_times)}')
                 continue
             if a.isna().all():
-                print(f'{sessname}: {start<eventtime<end= } {eventtime} not found')
+                print(f'{sessname}: {start<eventtime<end= } {eventtime} {event_name} not found. '
+                      f'Event {np.where(event_times == eventtime)[0][0] + 1}/{len(event_times)}')
                 aligned_epochs.append(pd.Series(np.full_like(event_tdeltas, np.nan)))
             else:
-                aligned_epochs.append(pupil_size.loc[eventtime + window[0]: eventtime + window[1]])
+                if pupil_isout.loc[eventtime + window[0]: eventtime + window[1]].mean() > 0.5:
+                    warnings.warn(f'{sessname}: {eventtime} {event_name} has many outliers. Not using')
+                    aligned_epochs.append(pd.Series(np.full_like(event_tdeltas, np.nan)))
+                else:
+                    aligned_epochs.append(pupil_size.loc[eventtime + window[0]: eventtime + window[1]])
         for aligned_epoch, eventtime in zip(aligned_epochs, event_times):
             aligned_epoch.index = np.round(aligned_epoch.index - eventtime, 2)
         sessname_list = [sessname] * len(event_times)
@@ -1070,8 +1185,9 @@ class SessionPupil:
         aligned_epochs_df = aligned_epochs_df.dropna(axis=0, how='all')
         # for col in aligned_epochs_df.columns:
         #     aligned_epochs_df[col] = pd.to_numeric(aligned_epochs_df[col],errors='coerce')
-        aligned_epochs_df = aligned_epochs_df.ffill(axis=1, )
-        aligned_epochs_df = aligned_epochs_df.bfill(axis=1, )
+        aligned_epochs_df = aligned_epochs_df.interpolate(limit_direction='both',axis=1 )
+        # aligned_epochs_df = aligned_epochs_df.ffill(axis=1, )
+        # aligned_epochs_df = aligned_epochs_df.bfill(axis=1, )
         if baseline_dur:
             epoch_baselines = aligned_epochs_df.loc[:, -baseline_dur:0.0]
             aligned_epochs_df = aligned_epochs_df.sub(epoch_baselines.mean(axis=1), axis=0)
@@ -1150,6 +1266,56 @@ class SessionPupil:
 
         self.aligned_pupil[event_name] = aligned_epochs_df
 
+    def align2times(self,event_times,size_col,window, sessname, event_name, baseline_dur=0.0):
+
+        pupil_size = self.pupil_data[size_col]
+        pupil_isout = self.pupil_data['isout']
+        start, end = pupil_size.index[0], pupil_size.index[-1]
+        dt = np.round(np.nanmedian(np.diff(pupil_size.index)), 2)
+        event_tdeltas = np.round(np.arange(window[0], window[1], dt), 2)
+
+        event_trialnums = np.full_like(event_times, np.nan)
+        # aligned_epochs = [[pupil_size.loc[eventtime + tt], np.nan) for tt in event_tdeltas]
+        #                   for eventtime in event_times]
+        # aligned_epochs = [pupil_size.loc[eventtime+window[0]: eventtime+window[1]] for eventtime in event_times]
+        aligned_epochs = []
+        epoch_isout = []
+        for eventtime in event_times:
+            try:
+                a = pupil_size.loc[eventtime + window[0]: eventtime + window[1]]
+            except KeyError:
+                print(f'{sessname}: {start<eventtime<end= } {eventtime}  {event_name} not found. '
+                      f'Event {np.where(event_times == eventtime)[0][0] + 1}/{len(event_times)}')
+                continue
+            if a.isna().all():
+                print(f'{sessname}: {start<eventtime<end= } {eventtime} {event_name} not found. '
+                      f'Event {np.where(event_times == eventtime)[0][0] + 1}/{len(event_times)}')
+                aligned_epochs.append(pd.Series(np.full_like(event_tdeltas, np.nan)))
+            else:
+                if pupil_isout.loc[eventtime + window[0]: eventtime + window[1]].mean() > 0.5:
+                    warnings.warn(f'{sessname}: {eventtime} {event_name} has many outliers. Not using')
+                    aligned_epochs.append(pd.Series(np.full_like(event_tdeltas, np.nan)))
+                else:
+                    aligned_epochs.append(pupil_size.loc[eventtime + window[0]: eventtime + window[1]])
+        for aligned_epoch, eventtime in zip(aligned_epochs, event_times):
+            aligned_epoch.index = np.round(aligned_epoch.index - eventtime, 2)
+        sessname_list = [sessname] * len(event_times)
+        aligned_epochs_df = pd.DataFrame(aligned_epochs, columns=event_tdeltas,
+                                         index=pd.MultiIndex.from_tuples(list(zip(event_times, event_trialnums,
+                                                                                  sessname_list)),
+                                                                         names=['time', 'trial', 'sess']))
+        aligned_epochs_df = aligned_epochs_df.dropna(axis=0, how='all')
+        # for col in aligned_epochs_df.columns:
+        #     aligned_epochs_df[col] = pd.to_numeric(aligned_epochs_df[col],errors='coerce')
+        aligned_epochs_df = aligned_epochs_df.interpolate(limit_direction='both', axis=1)
+        # aligned_epochs_df = aligned_epochs_df.ffill(axis=1, )
+        # aligned_epochs_df = aligned_epochs_df.bfill(axis=1, )
+        if baseline_dur:
+            epoch_baselines = aligned_epochs_df.loc[:, -baseline_dur:0.0]
+            aligned_epochs_df = aligned_epochs_df.sub(epoch_baselines.mean(axis=1), axis=0)
+
+        self.aligned_pupil[event_name] = aligned_epochs_df
+
 
 class Session:
     def __init__(self, sessname, ceph_dir, pkl_dir='X:\Dammy\ephys_pkls', ):
@@ -1178,7 +1344,7 @@ class Session:
         """
         self.spike_obj = SessionSpikes(spike_times_path, spike_cluster_path, start_time, parent_dir)
 
-    def init_sound_event_dict(self, sound_write_path, patterns=None):
+    def init_sound_event_dict(self, sound_write_path, **format_kwargs):
         """
         Initialize a sound event dictionary using the given parameters.
 
@@ -1193,62 +1359,42 @@ class Session:
         Returns:
             None
         """
+        patterns = format_kwargs.get('patterns', None)
+        normal_patterns = format_kwargs.get('normal_patterns', None)
+        if normal_patterns is None:
+            raise ValueError('No normal patterns provided')
+        if patterns is None:
+            raise ValueError('No patterns provided')
+
+        patterns_df = pd.DataFrame(patterns, columns=list('ABCD'))
+        ABCD_patts = [pattern for pattern in patterns if np.all(np.diff(pattern)>0)]
+        non_ABCD_patts = [pattern for pattern in patterns if not np.all(np.diff(pattern)>0)]
+        patt_rules = [0 if patt in ABCD_patts else 1 for patt in patterns]
+        patt_group = [np.where(patterns_df['A']==patt[0])[0][0] for patt in patterns]
+        ptypes = {'_'.join([str(e) for e in patt]): int(f'{group}{rule}')
+                  for patt, group, rule in zip(patterns, patt_group, patt_rules)}
+
         if not sound_write_path:
             assert self.sound_writes_df is not None
             sound_writes = self.sound_writes_df
         else:
             sound_writes = load_sound_bin(sound_write_path)
-            sound_writes = format_sound_writes(sound_writes, patterns)
+            sound_writes = format_sound_writes(sound_writes,ptypes=ptypes, **format_kwargs if format_kwargs else {})
             self.sound_writes_df = sound_writes
 
-        # assign sounds to trials
-        # sound_writes['Trial_Number'] = np.full_like(sound_writes.index, -1)
-        # sound_writes_diff = sound_writes['Time_diff'] = sound_writes['Timestamp'].diff()
-        # print(sound_writes_diff[:10])
-        # long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 1))
-        # for n, idx in enumerate(long_dt):
-        #     sound_writes.loc[idx:, 'Trial_Number'] = n
-        # sound_writes['Trial_Number'] = sound_writes['Trial_Number'] + 1
-        # if '240216a' in str(sound_write_path):
-        #     sound_writes = sound_writes[sound_writes['Trial_Number'] > 30]
-        # sound_writes_diff = sound_writes['Time_diff'] = sound_writes['Timestamp'].diff()
-        # sound_writes['Payload_diff'] = sound_writes['Payload'].diff()
-        # long_dt = np.squeeze(np.argwhere(sound_writes_diff.values > 1))
-        #
-        # tones = sound_writes['Payload'].unique()
-        #
-        # pattern_tones = tones[tones >= 8]
-        # base_pip_idx = [e for e in pattern_tones if e not in sum(patterns, [])]
-        # if len(base_pip_idx) > 1:
-        #     base_pip_idx = sound_writes.query('Payload in @base_pip_idx')['Payload'].mode().iloc[0]
-        # else:
-        #     base_pip_idx = base_pip_idx[0]
-        #
-        # normal_patterns = [pattern for pattern in patterns if (np.diff(pattern) > 0).all()]
-        # deviant_patterns = [pattern for pattern in patterns if pattern not in normal_patterns]
-        #
-        # all_pip_idxs = normal
-        # sound_writes['pattern_pips'] = sound_writes['Payload'].isin(sum(patterns, []))
-        # sound_writes['pattern_start'] = sound_writes['Payload_diff'].isin(np.array(patterns)[:, 0] - base_pip_idx) * \
-        #                                 sound_writes['pattern_pips']
-        # sound_writes['pip_counter'] = np.zeros_like(sound_writes['pattern_start']).astype(int)
-        # for i in sound_writes.query('pattern_start == True').index:
-        #     sound_writes.loc[i:i + 3, 'pip_counter'] = np.cumsum(sound_writes['pattern_pips'].loc[i:i + 3]) \
-        #                                                * sound_writes['pattern_pips'].loc[i:i + 3]
-        # print(base_pip_idx)
         base_pip_idx = [e for e in sound_writes['Payload'].unique() if e not in sum(patterns, []) and e >= 8]
         if len(base_pip_idx) > 1:
             base_pip_idx = sound_writes.query('Payload in @base_pip_idx')['Payload'].mode().iloc[0]
         else:
             base_pip_idx = base_pip_idx[0]
-        patterns_df = pd.DataFrame(patterns, columns=list('ABCD'))
         event_sound_times = {}
         event_sound_idx = {}
         if 3 in sound_writes['Payload'].values:
             for idx, p in patterns_df.iterrows():
                 for pi, pip in enumerate(p):
+                    ptype= ptypes['_'.join([str(e) for e in p])]
                     timesss = sound_writes.query(f'Payload == {pip} and pip_counter == {pi + 1} '
-                                                 f'and ptype == @idx%2')['Timestamp']
+                                                 f'and ptype == @ptype')['Timestamp']
                     if not timesss.empty:
                         event_sound_times[f'{p.index[pi]}-{idx}'] = timesss
                         event_sound_idx[f'{p.index[pi]}-{idx}'] = pip
@@ -1314,7 +1460,7 @@ class Session:
         mean_unit_std = []
 
         time_bin = 0.1
-        event_free_time_bins = [get_times_in_window(event_times, [t-time_bin, t+time_bin]).size == 0
+        event_free_time_bins = [get_times_in_window(event_times, [t-event_free_time_window, t+event_free_time_window]).size == 0
                                 for t in np.arange(self.spike_obj.start_time, self.spike_obj.start_time
                                                    + self.spike_obj.duration-time_bin, time_bin)]
         event_free_time_bins = np.array(event_free_time_bins)
@@ -1472,7 +1618,7 @@ class Session:
                 self.td_df.loc[tt + 1:t, 'n_since_last'] = self.td_df.loc[tt + 1:t, 'n_since_last'] - tt
             self.td_df.loc[t + 1:, 'n_since_last'] = self.td_df.loc[t + 1:, 'n_since_last'] - t
 
-    def get_local_rate(self, window=5):
+    def get_local_rate(self, window=10):
         self.td_df['local_rate'] = self.td_df['Tone_Position'].rolling(window=window).mean()
 
     def init_lick_obj(self, lick_times_path, sound_events_path, normal):

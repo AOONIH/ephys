@@ -191,6 +191,8 @@ def match2tdata(sessdirs:list[Path],to_matchdirsss:list[list[Path]],datatype_lbl
 def get_sessdirs(datadir:Path, name:str, date:str,pattern='*<name>*<date>*'):
     # print(f'{name,date = }')
     # print(list(datadir.glob(f'*'))[:2])
+    if 'bins' in datadir.name:
+        print(f'{datadir = }')
     date_refmt = datetime.strptime(date, '%y%m%d').strftime('%Y-%m-%d')
     matching_dirs = sorted(np.unique(list(datadir.glob(pattern.replace('<name>',name).replace('<date>',date)))+
                                      list(datadir.glob(pattern.replace('<name>',name).replace('<date>',date_refmt)))))

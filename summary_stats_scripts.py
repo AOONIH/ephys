@@ -26,11 +26,11 @@ if __name__ == "__main__":
     assert pickles_dir.is_dir()
     pickle_files = list(pickles_dir.glob('*.pkl'))
 
-    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
+    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_ephys_2401.csv')
     session_topology = pd.read_csv(sess_topology_path)
-    sesstype = ['main']
-    # animals = ['DO79']
-    animals = ['DO80', 'DO81', 'DO82']
+    sesstype = ['pre','post']
+    animals = ['DO79','DO81']
+    # animals = ['DO80', 'DO81', 'DO82']
     main_sessions = [Path(e).stem.replace('_SoundData','')
                      for e in session_topology.query('sess_order in @sesstype')['sound_bin'].values]
 
@@ -47,8 +47,9 @@ if __name__ == "__main__":
     for sess_i, ses_result in enumerate(results):
         session_decoder_accuracy[pickle_files[sess_i].stem] = ses_result
     # print(results)
-    [session_decoder_accuracy.pop(sess) for sess in list(session_decoder_accuracy.keys()) if not session_decoder_accuracy[sess]]
-    decoding_accuracies_tobase = [[session_decoder_accuracy[sess][f'{pip}_to_base'] for sess in session_decoder_accuracy]
+    [session_decoder_accuracy.pop(sess) for sess in list(session_decoder_accuracy.keys()) if not session_decoder_accuracy[sess]
+     or 'all_vs_all_no_base' not in session_decoder_accuracy[sess]]
+    decoding_accuracies_tobase = [[session_decoder_accuracy[sess][f'all_vs_all_no_base'] for sess in session_decoder_accuracy]
                                   for pip in 'ABCD']
     cross_sess_plot = plt.subplots(figsize=(8,8))
     # cross_sess_plot[1].scatter([0]*len(decoding_accuracies[0]),[np.mean(e) for e in decoding_accuracies[0]])
@@ -56,7 +57,7 @@ if __name__ == "__main__":
                                labels=list('ABCD'),)
     cross_sess_plot[1].set_ylim([0,1])
     cross_sess_plot[1].tick_params(axis='both',labelsize=16)
-    cross_sess_plot[1].axhline(0.5,linestyle='--',color='k')
+    cross_sess_plot[1].axhline(0.25,linestyle='--',color='k')
     cross_sess_plot[1].set_title('decoding accuracy for pip vs base tone across sessions',fontsize=16)
     cross_sess_plot[0].show()
     cross_sess_plot[0].set_constrained_layout(True)
