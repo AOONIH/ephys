@@ -1,28 +1,3 @@
-"""
-This module contains functions for analyzing pupil and electrophysiology data.
-
-Functions:
-- group_pupil_across_sessions: Groups pupil data across sessions based on conditions.
-- get_pupil_diff_by_session: Calculates the difference in pupil data between two conditions by session.
-- plot_pupil_diff_across_sessions: Plots the difference in pupil responses across sessions.
-- plot_pupil_ts_by_cond: Plots pupil time series by condition.
-- plot_pupil_diff_ts_by_cond: Plots the difference in pupil time series between conditions.
-- add_name_to_response_dfs: Adds session names to the multi-index of response DataFrames.
-- get_mean_responses_by_cond: Calculates mean responses by condition.
-- get_response_diff: Computes the difference between two response conditions.
-- get_max_diffs: Finds the maximum differences in responses within a specified window.
-- plot_pupil_max_diff_bysess_by_cond: Plots the maximum differences in pupil responses by session and condition.
-- plot_pupil_diff_max_by_cond: Plots the maximum differences in pupil responses between conditions.
-- decode_responses: Decodes responses using machine learning models.
-- save_responses_dicts: Saves response dictionaries to a file.
-- load_pupil_sess_pkl: Loads pupil session data from a pickle file.
-- init_pupil_td_obj: Initializes trial data objects for pupil analysis.
-- process_pupil_td_data: Processes trial data for pupil analysis.
-- init_sess_pupil_obj: Initializes session pupil objects.
-- process_pupil_obj: Processes pupil data for a session.
-
-"""
-
 import os
 
 from behviour_analysis_funcs import sync_beh2sound, get_all_cond_filts, add_datetimecol, get_drug_dates, \
@@ -87,7 +62,7 @@ def get_pupil_diff_by_session(pupil_data1:pd.DataFrame, pupil_data2:pd.DataFrame
         if any([pupil_data1.xs(sess,level='sess').shape[0]<7, pupil_data2.xs(sess,level='sess').shape[0]<7]):
             print(f'{sess} not enough data for pupil diff')
             continue
-        mean_diff = (pupil_data1.xs(sess,level='sess').median(axis=0)- 
+        mean_diff = (pupil_data1.xs(sess,level='sess').median(axis=0)-
                      pupil_data2.xs(sess,level='sess').median(axis=0))
         pupil_diff_by_sess.append(mean_diff)
         used_sess.append(sess)
@@ -1163,7 +1138,6 @@ if __name__ == "__main__":
     # plot rare vs frequent
     rare_freq_sessions = np.intersect1d(
         *[A_by_cond[cond].index.get_level_values('sess').values for cond in ['rare', 'frequent']])
-    rare_freq_figdir = norm_dev_figdir.parent/'rare_freq'
     if not rare_freq_figdir.is_dir():
         rare_freq_figdir.mkdir()
     rare_freq_plot = plot_pupil_ts_by_cond(A_by_cond, ['rare', 'frequent'],sess_list=rare_freq_sessions )

@@ -17,7 +17,6 @@ from behviour_analysis_funcs import get_all_cond_filts
 from ephys_analysis_funcs import posix_from_win, plot_2d_array_with_subplots, plot_psth, format_axis, plot_sorted_psth
 from neural_similarity_funcs import plot_similarity_mat, compare_pip_sims_2way
 from regression_funcs import run_glm
-from unit_analysis import get_participation_rate
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()
@@ -593,9 +592,9 @@ if '__main__' == __name__:
         for e in pips_by_cond}
     x_ser = np.round(np.linspace(*full_patt_window, concat_normdev_hipp_only[f'A-0'].shape[-1]), 2)
 
-    active_units_by_pip_normdev = {pip: np.hstack([get_participation_rate(full_pattern_responses_4_ts_dec[sess][pip],
-                                                                          full_patt_window,
-                                                                          [0.1, 1], 2, max_func=np.max)
+    active_units_by_pip_normdev = {pip: np.hstack([get_active_units(full_pattern_responses_4_ts_dec[sess][pip],
+                                                                    full_patt_window,
+                                                                    [0.1, 1], 2, max_func=np.max)
                                                    for sess in rare_freq_sess if
                                                    any(e in sess for e in hipp_animals)
                                                    if any(e in sess for e in hipp_animals)])

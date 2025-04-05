@@ -13,7 +13,6 @@ from scipy.stats import ttest_ind, sem
 from aggregate_ephys_funcs import *
 from behviour_analysis_funcs import get_all_cond_filts
 from ephys_analysis_funcs import posix_from_win, plot_sorted_psth, format_axis, plot_2d_array_with_subplots
-from unit_analysis import get_participation_rate
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()
@@ -113,8 +112,8 @@ if '__main__' == __name__:
     all_psth_plot[0].savefig(aggr_figdir / 'all_psth.pdf')
 
     # get active units
-    active_units_by_pip = {pip: np.hstack([get_participation_rate(event_responses_4_active_units[sess][pip], window,
-                                                                  [0.1, 0.25], 2, max_func=np.max)
+    active_units_by_pip = {pip: np.hstack([get_active_units(event_responses_4_active_units[sess][pip], window,
+                                                            [0.1, 0.25], 2, max_func=np.max)
                                            for sess in event_responses_4_active_units
                                            if any(e in sess for e in animals)])
                            for pip in pips_2_plot}

@@ -6,43 +6,6 @@ from behviour_analysis_funcs import get_lick_in_patt_trials, group_td_df_across_
 from scipy.stats import ttest_1samp
 from pupil_ephys_funcs import *
 
-def configure_plot(ax, title='', xlabel='', ylabel='', nbins=4, hline=0, vspans=None):
-    """
-    Configures a matplotlib axis with common settings.
-
-    Parameters:
-        ax (matplotlib.axes.Axes): The axis to configure.
-        title (str): Title of the plot.
-        xlabel (str): Label for the x-axis.
-        ylabel (str): Label for the y-axis.
-        nbins (int): Number of bins for axis ticks.
-        hline (float): Horizontal line value.
-        vspans (list of tuples): List of (start, end) tuples for vertical spans.
-    """
-    ax.locator_params(axis='both', nbins=nbins)
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.axhline(hline, c='k', ls='--')
-    if vspans:
-        for t_start, t_end in vspans:
-            ax.axvspan(t_start, t_end, fc='grey', alpha=0.1)
-
-def plot_pupil_diff(A_by_cond, conditions, sess_list, plot):
-    """
-    Plots pupil differences by condition.
-
-    Parameters:
-        A_by_cond (dict): Data grouped by condition.
-        conditions (list): List of condition names.
-        sess_list (list): List of sessions.
-        plot (list): List of matplotlib figure and axes.
-    """
-    plot_pupil_diff_ts_by_cond(A_by_cond, conditions, sess_list=sess_list, plot=plot)
-    configure_plot(plot[1], nbins=4, vspans=[(t, t + 0.15) for t in np.arange(0, 1, 0.25)])
-    plot[0].set_layout_engine('tight')
-    plot[0].show()
-
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file')
@@ -663,13 +626,52 @@ if '__main__' == __name__:
 
     rare_freq_diff_by_block_plot = plt.subplots()
     for i in range(3):
-        plot_pupil_diff(A_by_cond, [f'rare_{i+1}', f'frequent_{i+1}'], rare_freq_sessions, rare_freq_diff_by_block_plot)
+        plot_pupil_diff_ts_by_cond(A_by_cond, [f'rare_{i+1}', f'frequent_{i+1}'],
+                                   sess_list=rare_freq_sessions,
+                                   plot=rare_freq_diff_by_block_plot,)
+        rare_freq_diff_by_block_plot[1].locator_params(axis='both', nbins=4)
+        rare_freq_diff_by_block_plot[1].set_title('')
+        [rare_freq_diff_by_block_plot[1].axvspan(t, t + 0.15, fc='grey', alpha=0.1) for t in np.arange(0, 1, 0.25)]
+        rare_freq_diff_by_block_plot[1].axhline(0, c='k', ls='--')
+        rare_freq_diff_by_block_plot[0].set_layout_engine('tight')
+    rare_freq_diff_by_block_plot[1].set_ylabel('')
+    rare_freq_diff_by_block_plot[1].set_xlabel('')
+    rare_freq_diff_by_block_plot[0].show()
+#     # # rare_freq_diff_by_block_plot[0].savefig(rare_freq_figdir / f'rare_freq_diff_by_block_{i+1}.svg')
+#     # rare_freq_diff_by_block_plot[0].savefig(rare_freq_figdir / f'rare_freq_diff_by_block.svg')
 
-    # Plot rare frequent diff
-    rare_freq_diff_plot = plot_pupil_diff_ts_by_cond(A_by_cond, ['distant', 'recent'], sess_list=rare_freq_sessions, cond_line_kwargs=None)
-    configure_plot(rare_freq_diff_plot[1], nbins=4, vspans=[(t, t + 0.15) for t in np.arange(0, 1, 0.25)])
+
+    # plot rare frequent diff
+    rare_freq_diff_plot = plot_pupil_diff_ts_by_cond(A_by_cond, ['distant', 'recent' ], sess_list=rare_freq_sessions,
+                                                     cond_line_kwargs=None)
+    rare_freq_diff_plot[1].locator_params(axis='both', nbins=4)
+    rare_freq_diff_plot[1].set_title('')
+    rare_freq_diff_plot[1].set_ylabel('')
+    rare_freq_diff_plot[1].set_xlabel('')
+    [rare_freq_diff_plot[1].axvspan(t, t + 0.15, fc='grey', alpha=0.1) for t in np.arange(0, 1, 0.25)]
+    rare_freq_diff_plot[1].axhline(0, c='k', ls='--')
     rare_freq_diff_plot[0].set_layout_engine('tight')
     rare_freq_diff_plot[0].show()
+# #     # rare_freq_diff_plot[0].savefig(rare_freq_figdir / 'rare_freq_diff_plot.svg')
+
+    # # plot max diff over window
+    # rare_freq_max_diff_plot,rare_freq_diff_data = plot_pupil_diff_max_by_cond(A_by_cond, ['distant', 'recent', ],
+    #                                                                           sess_list=rare_freq_sessions,
+    #                                                                           window_by_stim=(1.5, 2.5),
+    #                                                                           mean=np.max,
+    #                                                                           plot_kwargs={'showfliers': False,
+    #                                                                                        'showmeans': True,
+    #                                                                                        'labels': ['Pattern'],
+    #                                                                                        },
+    #                                                                           group_name='name')
+    #
+    # rare_freq_max_diff_plot[1].set_ylabel('')
+    # rare_freq_max_diff_plot[1].set_title('')
+    # rare_freq_max_diff_plot[1].axhline(0, c='k', ls='--')
+    # rare_freq_max_diff_plot[1].locator_params(axis='y', nbins=4)
+    # rare_freq_max_diff_plot[0].set_layout_engine('tight')
+    # rare_freq_max_diff_plot[0].set_size_inches(2.7,2.7)
+    # rare_freq_max_diff_plot[0].show()
 
     # plot max diff over window
     rare_freq_max_diff_plot, rare_freq_diff_data = plot_pupil_diff_max_by_cond(A_by_cond, ['recent', 'distant' ],
