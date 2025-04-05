@@ -57,6 +57,7 @@ if '__main__' == __name__:
 
 
     sess_pkl_path = ceph_dir / posix_from_win(r'X:\Dammy\pupil_data') / 'ephys_2401_musc_2401_cohort_sess_dicts.pkl'
+    sessions = load_pupil_sess_pkl(sess_pkl_path)
 
 
     existing_sessions = list(sessions.keys())
