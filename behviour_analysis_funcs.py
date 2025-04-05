@@ -1,3 +1,33 @@
+"""
+This module contains functions and classes for behavioral analysis in electrophysiology experiments.
+
+Functions:
+- get_sess_name_date_idx: Extracts session name, date, and index from session topology.
+- sync_beh2sound: Synchronizes behavioral events with sound events.
+- get_drug_dates: Retrieves drug administration dates based on cohort configuration.
+- get_all_cond_filts: Returns a dictionary of condition filters for trial data.
+- group_td_df_across_sessions: Groups trial data across multiple sessions.
+- get_n_since_last: Calculates the number of trials since the last occurrence of a specific condition.
+- vec_dt_replace: Replaces components of a datetime series vectorized.
+- add_datetimecol: Adds a datetime column to a DataFrame based on a time string column.
+- get_datetime_series: Converts time strings into datetime objects.
+- format_timestr: Formats time strings and returns datetime objects.
+- calculate_true_streak: Calculates streaks of True values in a boolean series.
+- get_last_pattern: Identifies the last pattern in a boolean series.
+- get_earlyX_trials: Identifies early trials based on timing offsets.
+- in_time_window: Checks if a time is within a specified window.
+- get_lick_in_patt_trials: Identifies trials with licks during a pattern.
+- get_cum_sum: Calculates cumulative sums for specific conditions.
+- get_prate_block_num: Assigns block numbers based on pattern presentation rates.
+- group_licks_across_sessions: Groups lick data across sessions based on conditions.
+- filter_session: Filters sessions based on specific criteria.
+- get_cumsum_columns: Adds cumulative sum columns for specific conditions.
+
+Classes:
+- MyHandlerLine2D: Custom handler for Line2D objects in matplotlib legends.
+
+"""
+
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -372,6 +402,7 @@ def get_lick_in_patt_trials(td_df, sess:str):
     td_df['lick_in_patt'] = [any([timedelta(seconds=2) > (lick - tone_t) > timedelta(seconds=0)
                                    for lick in licks]) if licks else False
                               for licks,tone_t in zip(td_df['Lick_Times_dt'],td_df['ToneTime_dt']) ]
+
 
 def get_cum_sum(td_df,col_name,eval_str):
     td_df[f'{col_name}_cumsum'] = td_df.eval(eval_str).cumsum()

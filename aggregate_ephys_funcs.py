@@ -250,7 +250,7 @@ def load_aggregate_sessions(pkl_paths, td_df_query=None):
 
 
 def aggregate_event_reponses(sessions: dict, events=None, events2exclude=None, window=(0, 0.25),
-                             pred_from_psth_kwargs=None, ):
+                             pred_from_psth_kwargs=None, ) -> dict:
     events_by_session = [list(sess.sound_event_dict.keys()) for sess in sessions.values()]
     # print(f'common events = {common_events}')
     common_events = events_by_session[0]
@@ -468,23 +468,6 @@ def predict_over_sliding_t(dec_model,resps_dict,pips2predict,window_s,resp_windo
 
 
     return dec_model.predict(responses[:,:,window_size:])
-
-
-def get_active_units(resp_mat: np.ndarray, resp_window: tuple|list, activity_window_S: list|tqdm,
-                     active_thresh: float, **kwargs):
-    # get response x series and window in idxs
-    x_ser = np.round(np.linspace(*resp_window, resp_mat.shape[-1]),2)
-    x_ser = np.round(x_ser, 2)
-    window_idxs = [np.where(x_ser == t)[0][0] for t in activity_window_S]
-    # get active units
-    max_func = partial(kwargs.get('max_func', np.max), axis=-1)
-    max_activity = max_func(resp_mat[:,window_idxs[0]:window_idxs[1]] if resp_mat.ndim == 2 else
-                            resp_mat[:, :, window_idxs[0]:window_idxs[1]])
-    active_units_bool = max_activity > active_thresh
-    if resp_mat.ndim == 3:
-        active_units_bool = active_units_bool.mean(axis=0)
-
-    return active_units_bool
 
 
 if __name__ == '__main__':
