@@ -743,29 +743,37 @@ def plot_psth(psth_rate_mat, event_lbl, window, title='', cbar_label=None, cmap=
 
 
 def plot_sorted_psth(responses_by_sess, pip, sort_pip, window, sort_window, plot=None, sessname_filter=None,
-                     im_kwargs=None,subset=None, plot_ts=True):
+                     im_kwargs=None,subset=None, plot_ts=True, plot_cv=True):
     if isinstance(sessname_filter, str):
         sessname_filter = [sessname_filter]
     # [print(sess) for sess in responses_by_sess.keys() if sessname_filter in sess]
-    response_dict = {
-        e: np.concatenate([responses_by_sess[sessname][e].mean(axis=0)
+    responses_4_sorting = {
+        e: np.concatenate([responses_by_sess[sessname][e][0::2].mean(axis=0) if plot_cv else
+                           responses_by_sess[sessname][e][:].mean(axis=0)
                            for sessname in responses_by_sess
                            if (any([e in sessname for e in sessname_filter]) if sessname_filter else True)])
          for e in [pip, sort_pip]}
-    # print(response_dict.keys())
+
+    responses_4_plotting = {
+        e: np.concatenate([responses_by_sess[sessname][e][1::2].mean(axis=0) if plot_cv else
+                           responses_by_sess[sessname][e][:].mean(axis=0)
+                           for sessname in responses_by_sess
+                           if (any([e in sessname for e in sessname_filter]) if sessname_filter else True)])
+         for e in [pip, sort_pip]}
+    # print(responses_4_plotting.keys())
     if plot is None:
         psth_plot = plt.subplots(2, sharex=True, gridspec_kw={'height_ratios': [1, 9], 'hspace': 0.1})
     else:
         psth_plot = plot
 
-    resp_mat = response_dict[pip]
+    resp_mat = responses_4_plotting[pip]
     if resp_mat.ndim == 3:
         resp_mat = resp_mat.mean(axis=0)
     x_ser = np.round(np.linspace(*window, resp_mat.shape[-1]), 2)
     sort_idxs = [np.where(x_ser == t)[0][0] for t in sort_window]
     print(sort_idxs)
 
-    max_by_row = np.argmax(response_dict[sort_pip][:, sort_idxs[0]:sort_idxs[1]], axis=1)
+    max_by_row = np.argmax(responses_4_sorting[sort_pip][:, sort_idxs[0]:sort_idxs[1]], axis=1)
     resp_mat_sorted = resp_mat[max_by_row.argsort()]
     plot_psth(resp_mat_sorted, pip, window, aspect=0.1, plot=(psth_plot[0], psth_plot[1][1] if plot_ts else psth_plot[1]),
               **im_kwargs if im_kwargs else {})

@@ -59,6 +59,7 @@ if __name__ == '__main__':
     parser.add_argument('--redo_postprocessing',default=0)
     parser.add_argument('--run_local',default=False)
 
+
     args = parser.parse_args()
 
     sessions = args.sessions.split('-')

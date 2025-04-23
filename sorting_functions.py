@@ -55,12 +55,15 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
 
         preprocessed_rec = None
         if raw_files and not ow_flag:
+        # if raw_files:
             try:
+                logger.debug('reading preprocessed dir')
                 preprocessed_rec = si.load_extractor(preprocessed_dir)
-                logger.debug('read processed preprocessed folder')
+                logger.debug('read  preprocessed folder')
             except FileNotFoundError: pass
 
         if not preprocessed_rec:
+            logger.debug('reading openephys dir')
             full_raw_rec = si.read_openephys(base_dir, block_index=index)
             logger.debug('read openephys dir')
             probes = gen_probe_group(probe_name)
@@ -117,7 +120,8 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
     drift_corr_flag = False if 'no_ks_drift' in sorter_dir_suffix else True
     sorting_kwargs = dict(do_correction=drift_corr_flag)
     if (rec_dir / f"{sorter}{sorter_dir_suffix}").is_dir() and not ow_flag:
-        logger.debug(f'{rec_dir / f"{sorter}{sorter_dir_suffix}"} already exists')
+        logger.debug(f'{rec_dir / f"{sorter}{sorter_dir_suffix}"} already exists, checking if it is empty')
+
         return
     if sorter in ['spykingcircus2']:
         container_flag=False
@@ -134,7 +138,8 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         aggregate_sorting = si.run_sorter(sorter_name=sorter, recording=all_recordings,
                                           output_folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
                                           singularity_image=container_flag, delete_container_files=True,
-                                          remove_existing_folder=True,verbose=True, **sorting_kwargs
+                                          remove_existing_folder=True,verbose=True,
+                                          extra_requirements=['numcodecs==0.15.1'],**sorting_kwargs
                                           )
         # aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=all_recordings,
         #                                               grouping_property='group',

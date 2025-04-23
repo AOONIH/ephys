@@ -140,9 +140,9 @@ if '__main__' == __name__:
             all_resps_psth[1][0].locator_params(axis='y', nbins=2)
             all_resps_psth[0].show()
 
-            all_resps_psth[0].savefig(psth_figdir / f'{pip}_{animal}_A_resps_psth_aggr_fam_sessions.pdf')
+            all_resps_psth[0].savefig(psth_figdir / f'{pip}_{animal}_A_resps_psth_aggr_fam_sessions_cv_sort.pdf')
 
-    pips_2_plot = ['base','X','trial_start'][2:]
+    pips_2_plot = ['base','X','trial_start'][:]
     for pip in pips_2_plot:
         cmap_norm = TwoSlopeNorm(vcenter=0, vmin=-1, vmax=1)
         psth_plot = plot_sorted_psth(event_responses_4_psth,pip,pip,window=[-0.25,1],sort_window=[0.1,0.25],
@@ -157,7 +157,7 @@ if '__main__' == __name__:
 
         psth_plot[0].show()
 
-        psth_plot[0].savefig(psth_figdir / f'{pip}_all_resps_psth_aggr_fam_sessions.pdf')
+        psth_plot[0].savefig(psth_figdir / f'{pip}_all_resps_psth_aggr_fam_sessions_cv_sort.pdf')
 
     # psth for miss trials only
     miss_trials_idxs_by_sess = {sess: event_features[sess]['X']['td_df'].eval(cond_filters['miss_all'])
@@ -302,6 +302,24 @@ if '__main__' == __name__:
      for i,j in list(combinations(accuracy_across_sessions_df.columns,2))]
     print(ttest_ind(accuracy_across_sessions[0][0],accuracy_across_sessions[1][0], alternative='two-sided'))
     print(ttest_ind(accuracy_across_sessions[0][1],accuracy_across_sessions[1][1], alternative='two-sided'))
+
+    # format accuracy across sessions df
+    accuracy_across_sessions_df = accuracy_across_sessions_dfs[0].copy()
+    accuracy_across_sessions_df.columns = list('ABCD')
+    # add name to multiindex
+    accuracy_across_sessions_df['name'] = accuracy_across_sessions_df.index.map(lambda x: x.split('_')[0])
+    accuracy_across_sessions_df = accuracy_across_sessions_df.set_index('name',append=True)
+
+    # plot acc for each pip over sessions
+    pip_acc_over_sess_plot = plt.subplots(len(animals),sharey=True)
+    for ai, animal in enumerate(animals):
+        animal_pip_accs = accuracy_across_sessions_df.xs(animal,level='name')
+        for pi, pip in enumerate('ABCD'):
+            pip_acc_over_sess_plot[1][ai].plot(animal_pip_accs[pip].values,label=f'{pip}',marker='o')
+    # format
+    [ax.set_ylim(0.1,0.7) for ax in pip_acc_over_sess_plot[1]]
+    pip_acc_over_sess_plot[1][0].legend(ncols=accuracy_across_sessions_df.shape[1])
+    pip_acc_over_sess_plot[0].show()
 
     ### delete ###
     # predict b deviant

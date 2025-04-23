@@ -40,7 +40,11 @@ def group_pupil_across_sessions(sessions_objs: dict,sessnames:list,event:str, co
             #     print(sessname,event,cond_name,cond_filter,cond_pupil.shape)
             # cond_pupil = sessions_objs[sessname].pupil_obj.aligned_pupil[event].query('trial in @trial_nums')
         else:
-            cond_pupil = sessions_objs[sessname].pupil_obj.aligned_pupil[event]
+            try:
+                cond_pupil = sessions_objs[sessname].pupil_obj.aligned_pupil[event]
+            except KeyError:
+                print(f'no {event} data for {sessname}')
+                continue
         all_cond_pupil.append(cond_pupil)
     cond_pupil_df = pd.concat(all_cond_pupil, axis=0)
     # cond_pupil_df['name'] = cond_pupil_df.index.get_level_values('sess').str.split('_').str[0]
@@ -94,12 +98,16 @@ def plot_pupil_diff_across_sessions(cond_list, event_responses, sess_drug_types,
 
 
 def plot_pupil_ts_by_cond(responses_by_cond:dict, conditions, plot=None, sess_list=None, plot_indv_sess=False,
-                          plot_mean=True, cond_line_kwargs=None, group_name=['sess']):
+                          plot_mean=True, cond_line_kwargs=None, group_name=['sess'], plot_kwargs=None):
     if plot is None:
         pupil_ts_plot = plt.subplots()
     else:
         pupil_ts_plot = plot
 
+    if plot_kwargs is None:
+        plot_kwargs = {}
+
+    print(f'{cond_line_kwargs = }')
     x_ser = responses_by_cond[conditions[0]].columns
 
     # group_by_names = ['sess'] if group_name == 'sess' else ['sess',group_name]
@@ -125,7 +133,8 @@ def plot_pupil_ts_by_cond(responses_by_cond:dict, conditions, plot=None, sess_li
                                    c=cond_line_kwargs[cond]['c'] if cond_line_kwargs else f'C{cond_i}',)
              for _,sess_response in mean_responses_by_sess.iterrows()]
         if plot_mean:
-            pupil_ts_plot[1].plot(x_ser, mean_responses_by_sess.mean(axis=0), label=cond,
+            pupil_ts_plot[1].plot(x_ser, mean_responses_by_sess.mean(axis=0),
+                                  label='_'.join([cond,plot_kwargs.get('label_sffx','')]) if plot_kwargs.get('label_sffx') else cond,
                                   **cond_line_kwargs[cond] if cond_line_kwargs else {})
             # plot sems
             if len(mean_responses_by_sess) > 1:
@@ -133,7 +142,7 @@ def plot_pupil_ts_by_cond(responses_by_cond:dict, conditions, plot=None, sess_li
                 pupil_ts_plot[1].fill_between(x_ser.tolist(),
                                               mean_responses_by_sess.mean(axis=0) - mean_responses_by_sess.sem(axis=0),
                                               mean_responses_by_sess.mean(axis=0) + mean_responses_by_sess.sem(axis=0),
-                                              fc=cond_line_kwargs[cond]['c'] if cond_line_kwargs else f'C{cond_i}',
+                                              fc=cond_line_kwargs[cond]['c'] if cond_line_kwargs else f'C{len(pupil_ts_plot[1].lines) - 1}',
                                               alpha=0.1)
             else:
 
@@ -423,10 +432,14 @@ def plot_pupil_diff_max_by_cond(responses_by_cond: dict, conditions, plot=None, 
         max_diffs_by_group_shuffled = {cond: get_max_diffs(cond_diffs,kwargs.get('window_by_stim',(1.5,2.5)),group_level=group_name)
                                         for cond,cond_diffs in mean_diff_by_group_shuffled.items()}
         og_positions = plot_kwargs.get('positions',np.arange(len(max_diffs_by_group)))
+
         if plot_kwargs.get('positions'):
             plot_kwargs.pop('positions')
+        if plot_kwargs.get('labels'):
+            old_labels = plot_kwargs.get('labels')
+            plot_kwargs['labels'] = [f'{lbl} shuffled' for lbl in old_labels]
         pupil_max_diff_plot[1].boxplot(list(max_diffs_by_group_shuffled.values()),
-                                       positions=np.array(og_positions)+len(max_diffs_by_group),
+                                       positions=np.array(og_positions) +1.5,
                                        **plot_kwargs if plot_kwargs else {})
 
 
@@ -536,12 +549,8 @@ def init_sess_pupil_obj(sess_dict: dict, sessname: str, ceph_dir: Path, all_sess
 
 
 def process_pupil_obj(sess_dict: dict, sessname: str, pupil_epoch_window=(-1, 3),
-                          cond_filters: dict = get_all_cond_filts(),alignmethod='w_td_df'):
+                          cond_filters: dict = get_all_cond_filts(),alignmethod='w_soundcard'):
     normal = get_main_sess_patterns(td_df=sess_dict[sessname].td_df)
-
-    [sess_dict[sessname].get_pupil_to_event(e_idx, e_name, [-1, 3], alignmethod=alignmethod,
-                                            align_kwargs=dict(baseline_dur=1, ))  # size_col='canny_raddi_a_zscored'
-     for e_idx, e_name in tqdm(zip([3, normal[0][0]], ['X', 'A']), total=2, desc='pupil data processing')]
 
     main_patterns = get_main_sess_patterns(td_df=sess_dict[sessname].td_df)
     if sess_dict[sessname].td_df['Stage'].iloc[0] in [3, 5]:

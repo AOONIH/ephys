@@ -208,6 +208,8 @@ if __name__ == '__main__':
     parser.add_argument('datadir_lbl')
     # parser.add_argument('dir2copy')
     parser.add_argument('animals')
+    parser.add_argument('--exp_name', default='Dammy')
+    parser.add_argument('--exp_prfx', default='DO')
     parser.add_argument('--skip_faulty',default=False)
     parser.add_argument('--sess_top_suffix',default='')
 
@@ -232,7 +234,7 @@ if __name__ == '__main__':
         sess_dirs = [e for e in sess_dirs if re.match(r'^[a-zA-Z]{2}\d{2}_.*_\d{3}$',e.stem)]
         assert all([re.match(r'^[a-zA-Z]{2}\d{2}_.*_\d{3}$',e.stem) for e in sess_dirs])  # test for valid session names
     elif args.datadir_lbl == 'tdata':
-        tdata_dir = home_dir/'data'/'Dammy'
+        tdata_dir = home_dir/'data'/args.exp_name
         tdata_files_by_animal = [list((tdata_dir/animal/'TrialData').glob('*.csv')) for animal in animals]
         sess_dirs = sorted(sum(tdata_files_by_animal,[]))
     else:

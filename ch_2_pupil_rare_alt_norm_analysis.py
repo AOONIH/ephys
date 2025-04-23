@@ -27,11 +27,14 @@ if '__main__' == __name__:
     ]
     pupil_pkl_paths = [ceph_dir / posix_from_win(p) for p in [
         # r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_ephys_2024_allsess_v3_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
-        r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_ephys_2024_allsess_v2409_walt_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
+        # r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_ephys_2024_allsess_v2409_walt_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
+        r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_ephys_2024_allsess_v2409_walt_fam_2d_90Hz_hpass00_lpass0_TOM.pkl',
         # r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_ephys_2024_allsess_v3_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
         # r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_musc_2406_allsess_v2_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
-        r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_musc_2406_v2409_walt_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
+        # r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_musc_2406_v2409_walt_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
+        # r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_sept23_w_canny_w_new_out_method_fam_2d_90Hz_hpass00_lpass0_TOM.pkl',
         # r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_musc_2406_v2408_fam_2d_90Hz_hpass01_lpass4_TOM.pkl',
+        r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_musc_2406_v2409_walt_fam_2d_90Hz_hpass0_lpass0_TOM.pkl',
     ]]
 
     all_pupil_data = [load_pupil_data(pkl_path) for pkl_path in pupil_pkl_paths]
@@ -55,14 +58,14 @@ if '__main__' == __name__:
      for cohort_config, session_topology in zip(cohort_configs, session_topology_dfs)]
     cond_filters = get_all_cond_filts()
 
-
-    sess_pkl_path = ceph_dir / posix_from_win(r'X:\Dammy\pupil_data') / 'ephys_2401_musc_2401_cohort_sess_dicts.pkl'
+    # sess_pkl_path = ceph_dir / posix_from_win(r'X:\Dammy\pupil_data') / 'ephys_2401_musc_2401_cohort_sess_dicts_no_filt.pkl'
+    sess_pkl_path = Path(r'D:') / 'ephys_2401_musc_2401_cohort_sess_dicts_no_filt.pkl'
     sessions = load_pupil_sess_pkl(sess_pkl_path)
-
+    loaded_sess_dict_sig = copy(tuple(sorted(sessions.items())))
 
     existing_sessions = list(sessions.keys())
 
-    window = [-1, 4]
+    window = [-1, 3]
     for sessname in tqdm(list(pupil_data_dict.keys()), desc='processing sessions'):
         print(sessname)
         if sessname in ['DO85_240625','DO79_240215'] or 'DO76' in sessname:  # issue with getting correct trial nums in trial dict
@@ -70,7 +73,7 @@ if '__main__' == __name__:
         if sessname in existing_sessions or args.ow:
             continue
 
-
+        print(f'initializing and processing td for {sessname}')
         init_pupil_td_obj(sessions, sessname, ceph_dir, all_sess_info, td_path_pattern, home_dir)
         process_pupil_td_data(sessions,sessname,drug_sess_dict)
 
@@ -125,10 +128,10 @@ if '__main__' == __name__:
                                                  event_name='none_X_licks',baseline_dur=1)
 
     # save sessions
-    # if list(sessions.keys()) != existing_sessions or args.ow:
-    #     print('saving sessions')
-    #     with open (sess_pkl_path, 'wb') as f:
-            # pickle.dump(sessions, f)
+    if tuple(sorted(sessions.items())) != loaded_sess_dict_sig or args.ow:
+        print('saving sessions')
+        with open (sess_pkl_path, 'wb') as f:
+            pickle.dump(sessions, f)
 
     cond_filters = get_all_cond_filts()
     # good_trial_filt = 'n_since_last_Trial_Outcome <=5 & lick_in_patt==0'
@@ -157,13 +160,15 @@ if '__main__' == __name__:
 
     assert pd.concat([A_by_cond['rare'],A_by_cond['frequent']]).drop_duplicates().shape[0] == pd.concat([A_by_cond['rare'],A_by_cond['frequent']]).shape[0]
 
+    start_by_cond = {'all':group_pupil_across_sessions(sessions, list(sessions.keys()), 'Start','rare',use_all=True)}
+
     # set figsize for pupil ts plots
     matplotlib.rcParams['figure.figsize'] = 4,3
     # assert False
 
-    norm_dev_figdir = ceph_dir / 'Dammy' / 'figures' / f'norm_dev_plots_{"_".join(cohort_tags)}'
-    rare_freq_figdir = norm_dev_figdir.parent/f'rare_freq_new_out_method_{"_".join(cohort_tags)}'
-    pupil2features_figdir = norm_dev_figdir.parent/f'pupil2features_{"_".join(cohort_tags)}'
+    norm_dev_figdir = ceph_dir / 'Dammy' / 'figures' / f'norm_dev_plots_{"_".join(cohort_tags)}_no_filt'
+    rare_freq_figdir = norm_dev_figdir.parent/f'rare_freq_new_out_method_{"_".join(cohort_tags)}_no_filt'
+    pupil2features_figdir = norm_dev_figdir.parent/f'pupil2features_{"_".join(cohort_tags)}_no_filt'
 
     for figdir in [norm_dev_figdir,rare_freq_figdir,pupil2features_figdir]:
         if not figdir.is_dir():
@@ -174,11 +179,10 @@ if '__main__' == __name__:
     plot_pupil_ts_by_cond(A_by_cond, ['all'],plot=AX_plot)
     AX_plot[0].show()
 
-
-    non_X_lick_pupil = {'none_X_licks':group_pupil_across_sessions(sessions, list(sessions.keys()), 'none_X_licks', 'all',
-                                                    use_all=True)}
-    non_X_lick_pupil['trial_start'] = group_pupil_across_sessions(sessions, list(sessions.keys()), 'Start',None,
-                                                    use_all=True)
+    # non_X_lick_pupil = {'none_X_licks':group_pupil_across_sessions(sessions, list(sessions.keys()), 'none_X_licks', 'all',
+    #                                                 use_all=True)}
+    # non_X_lick_pupil['trial_start'] = group_pupil_across_sessions(sessions, list(sessions.keys()), 'Start',None,
+    #                                                 use_all=True)
 
     # hit vs miss
     hit_miss_keys = [k for k in X_by_cond.keys() if 'hit' in k or 'miss' in k]
@@ -194,15 +198,15 @@ if '__main__' == __name__:
     hit_miss_patt_none_plot[1].axvline(0,c='k',ls='--')
 
     hit_miss_patt_none_plot[0].show()
-    # hit_miss_patt_none_plot[0].savefig(pupil2features_figdir / 'hit_miss_plot.svg')
+    hit_miss_patt_none_plot[0].savefig(pupil2features_figdir / 'hit_miss_plot.pdf')
     # hit vs miss vs patt vs base
     hit_miss_patt_base_plot = plt.subplots(ncols=1,sharey=True,squeeze=False)
     plot_pupil_ts_by_cond(X_by_cond, ['hit_all', 'miss_all'],
                           plot=(hit_miss_patt_base_plot[0],hit_miss_patt_base_plot[1][0,0]),)
-    plot_pupil_ts_by_cond(A_by_cond, ['all','none'],
-                          plot=(hit_miss_patt_base_plot[0],hit_miss_patt_base_plot[1][0,0]))
-    plot_pupil_ts_by_cond(non_X_lick_pupil, ['trial_start', ],
-                          plot=(hit_miss_patt_base_plot[0],hit_miss_patt_base_plot[1][0,0]))
+    # plot_pupil_ts_by_cond(A_by_cond, ['all','none'],
+    #                       plot=(hit_miss_patt_base_plot[0],hit_miss_patt_base_plot[1][0,0]))
+    # plot_pupil_ts_by_cond(non_X_lick_pupil, ['trial_start', ],
+    #                       plot=(hit_miss_patt_base_plot[0],hit_miss_patt_base_plot[1][0,0]))
     for ax in hit_miss_patt_base_plot[1].flatten():
         ax.axvline(0,c='k',ls='--')
         ax.set_title('')
@@ -211,21 +215,29 @@ if '__main__' == __name__:
     hit_miss_patt_base_plot[0].set_layout_engine('tight')
     hit_miss_patt_base_plot[0].set_size_inches(5,3.8)
     hit_miss_patt_base_plot[0].show()
-    # hit_miss_patt_base_plot[0].savefig(pupil2features_figdir / 'hit_miss_base_plot.svg')
+    hit_miss_patt_base_plot[0].savefig(pupil2features_figdir / 'hit_miss_base_plot.pdf')
 
-    # group all lick pupil responses
-    none_X_licks_plot = plot_pupil_ts_by_cond(non_X_lick_pupil, ['none_X_licks'])
-    plot_pupil_ts_by_cond(X_by_cond, ['all'],plot=none_X_licks_plot)
-    # redo legend
-    none_X_licks_plot[1].get_legend().remove()
-    # none_X_licks_plot[1].legend(['licking','X:hits'], loc='upper center')
-    none_X_licks_plot[1].locator_params(axis='both', nbins=4)
-    none_X_licks_plot[1].set_title('')
-    none_X_licks_plot[1].axvline(0,c='k',ls='--')
-    none_X_licks_plot[0].show()
-    none_X_licks_plot[0].set_size_inches(2.5,2.2)
-    none_X_licks_plot[0].set_layout_engine('tight')
-    # none_X_licks_plot[0].savefig(pupil2features_figdir / 'none_X_licks_plot.svg')
+    # plot pupil ts to start
+    start_pupil_ts_plot = plot_pupil_ts_by_cond(start_by_cond,['all'])
+    format_axis(start_pupil_ts_plot[1],vlines=[0],ylabel='pupil size', xlabel='Time from trial onset (s)')
+    start_pupil_ts_plot[0].set_layout_engine('tight')
+    start_pupil_ts_plot[0].set_size_inches(3,3)
+    start_pupil_ts_plot[0].show()
+    start_pupil_ts_plot[0].savefig(pupil2features_figdir / 'start_pupil_ts_plot.pdf')
+
+    # # group all lick pupil responses
+    # none_X_licks_plot = plot_pupil_ts_by_cond(non_X_lick_pupil, ['none_X_licks'])
+    # plot_pupil_ts_by_cond(X_by_cond, ['all'],plot=none_X_licks_plot)
+    # # redo legend
+    # none_X_licks_plot[1].get_legend().remove()
+    # # none_X_licks_plot[1].legend(['licking','X:hits'], loc='upper center')
+    # none_X_licks_plot[1].locator_params(axis='both', nbins=4)
+    # none_X_licks_plot[1].set_title('')
+    # none_X_licks_plot[1].axvline(0,c='k',ls='--')
+    # none_X_licks_plot[0].show()
+    # none_X_licks_plot[0].set_size_inches(2.5,2.2)
+    # none_X_licks_plot[0].set_layout_engine('tight')
+    # none_X_licks_plot[0].savefig(pupil2features_figdir / 'none_X_licks_plot.pdf')
 
     # plot early X pupil
     earlyX_plot = plot_pupil_ts_by_cond(X_by_cond, ['all','earlyX_2tones','earlyX_3tones'])
@@ -240,7 +252,7 @@ if '__main__' == __name__:
     earlyX_plot[1].axvline(0,c='k',ls='--')
     earlyX_plot[0].set_size_inches(4,3)
     earlyX_plot[0].show()
-    # earlyX_plot[0].savefig(pupil2features_figdir / 'earlyX_plot.svg')
+    earlyX_plot[0].savefig(pupil2features_figdir / 'earlyX_plot.pdf')
 
     # get stats on peak and peak time across sessions
     X_A_max = [response_dict['all'].loc[:,0:].max(axis=1) for response_dict in [X_by_cond, A_by_cond]]
@@ -257,7 +269,7 @@ if '__main__' == __name__:
     X_A_max_t_hist[0].set_layout_engine('tight')
     X_A_max_t_hist[0].set_size_inches(3,4)
     X_A_max_t_hist[0].show()
-    # X_A_max_t_hist[0].savefig(pupil2features_figdir / 'X_A_max_t_hist.svg')
+    X_A_max_t_hist[0].savefig(pupil2features_figdir / 'X_A_max_t_hist.pdf')
     # # add line for mean and add text with mean
     # [X_A_max_t_hist[1][0].axvline(np.median(X_A_max[i]),ls='--',c='k') for i in range(2)]
     # [X_A_max_t_hist[1][0].text(0.5, 0.8, f'{np.median(X_A_max[i]):.2f}',
@@ -311,7 +323,7 @@ if '__main__' == __name__:
     indv_normdev_plots[0].set_size_inches((n_plot_cols * 3, n_plot_rows * 3))
     indv_normdev_plots[0].set_layout_engine('tight')
     indv_normdev_plots[0].show()
-# #     # indv_normdev_plots[0].savefig(norm_dev_figdir / 'indv_sessions.svg',)
+#     # indv_normdev_plots[0].savefig(norm_dev_figdir / 'indv_sessions.pdf',)
 
     # plot example sesssion
     eg_normdev_sess = 'DO82_240729'
@@ -326,7 +338,7 @@ if '__main__' == __name__:
     # eg_normdev_plot[0].set_size_inches((4, 4))
     eg_normdev_plot[0].show()
     # indv_normdev_plots[0].set_title(eg_sess)
-#     # eg_normdev_plot[0].savefig(norm_dev_figdir / f'example_norm_dev_sess_{eg_normdev_sess}.svg')
+    # eg_normdev_plot[0].savefig(norm_dev_figdir / f'example_norm_dev_sess_{eg_normdev_sess}.pdf')
 
     eg_rarefreq_sess = 'DO85_240711'
     rare_freq_cond_line_kwargs = {cond: {'c': 'darkblue' if 'distant' in cond else 'darkgreen',
@@ -343,7 +355,7 @@ if '__main__' == __name__:
     eg_rarefreq_plot[0].set_size_inches((3.8, 2.850))
     eg_rarefreq_plot[0].show()
     # indv_normdev_plots[0].set_title(eg_sess)
-#     # eg_rarefreq_plot[0].savefig(rare_freq_figdir / f'example_rare_freq_sess_{eg_rarefreq_sess}.svg')
+    # eg_rarefreq_plot[0].savefig(rare_freq_figdir / f'example_rare_freq_sess_{eg_rarefreq_sess}.pdf')
 
     norm_dev_early_late_plots = [plot_pupil_ts_by_cond(A_by_cond, [f'{cond}_early', f'{cond}_late'],
                                                        sess_list=norm_dev_sessions,
@@ -360,7 +372,7 @@ if '__main__' == __name__:
     norm_exp_vs_norm_late_plot[0].show()
     norm_exp_vs_norm_late_plot[0].set_layout_engine('tight')
 
-    # norm_exp_vs_norm_late_plot[0].savefig(norm_dev_figdir / 'norm_exp_vs_norm_late_plot.svg')
+    norm_exp_vs_norm_late_plot[0].savefig(norm_dev_figdir / 'norm_exp_vs_norm_late_plot.pdf')
 
     norm_dev_plot = plot_pupil_ts_by_cond(A_by_cond, ['normal_exp', 'deviant_C'], sess_list=norm_dev_sessions,
                                           cond_line_kwargs=normdev_line_kwargs)
@@ -381,7 +393,7 @@ if '__main__' == __name__:
         plot[0].set_layout_engine('tight')
         plot[0].set_size_inches(3.6,2.7)
         plot[0].show()
-        # plot[0].savefig(norm_dev_figdir / f'{savename}.svg')
+        plot[0].savefig(norm_dev_figdir / f'{savename}.pdf')
 
     norm_dev_diff_plot = plot_pupil_diff_ts_by_cond(A_by_cond, ['deviant_C','normal'], sess_list=norm_dev_sessions,
                                                     plot_indv_group=None)
@@ -400,7 +412,7 @@ if '__main__' == __name__:
     # norm_dev_diff_plot[0].set_size_inches(5,4)
     # # norm_dev_diff_plot[0].set_size_inches(3, 3)
     norm_dev_diff_plot[0].show()
-#     # norm_dev_diff_plot[0].savefig(norm_dev_figdir / 'norm_dev_diff_plot_indv_animal_lines.svg')
+    # norm_dev_diff_plot[0].savefig(norm_dev_figdir / 'norm_dev_diff_plot_indv_animal_lines.pdf')
 
     # plot max diff over window
     norm_dev_max_diff_plot,normdev_diff_data = plot_pupil_diff_max_by_cond(A_by_cond, ['normal_exp_midlate', 'deviant_C'],
@@ -408,7 +420,7 @@ if '__main__' == __name__:
                                                                            window_by_stim=[(1.5,2.5),(1.5,2.5)][0],
                                                                            mean=np.max,
                                                                            plot_kwargs={'showfliers':False,
-                                                                                        'labels':['Pattern'],
+                                                                                        'labels':['Pattern',],
                                                                                         'showmeans':False,
                                                                                         'widths':0.3},
                                                                            group_name='name',
@@ -423,18 +435,18 @@ if '__main__' == __name__:
     norm_dev_max_diff_plot[0].set_layout_engine('tight')
     norm_dev_max_diff_plot[0].set_size_inches(2.7,2.7)
     norm_dev_max_diff_plot[0].show()
-    norm_dev_max_diff_plot[0].savefig(norm_dev_figdir / 'norm_dev_max_diff_plot_w_shuffle.svg')
+    norm_dev_max_diff_plot[0].savefig(norm_dev_figdir / 'norm_dev_max_diff_plot_w_shuffle.pdf')
 
     # hist on data
     norm_dev_diff_hist = plt.subplots()
     norm_dev_diff_hist[1].hist(normdev_diff_data[0],label='A',alpha=0.5,density=True,bins='fd')
     # norm_dev_diff_hist[1].hist(normdev_diff_data[1],label='X',alpha=0.5,density=True)
     norm_dev_diff_hist[0].show()
-    # norm_dev_diff_hist[0].savefig(norm_dev_figdir / 'norm_dev_diff_hist.svg')
+    norm_dev_diff_hist[0].savefig(norm_dev_figdir / 'norm_dev_diff_hist.pdf')
 
     # ttest on diff data
     ttest_ind(normdev_diff_data[0][0].values,normdev_diff_data[1][0].values,alternative='greater')
-    ttest_1samp(normdev_diff_data[0],0,alternative='greater')
+    ttest_1samp(normdev_diff_data[0][0],0,alternative='greater')
 
     # alt vs rand analysis
     [A_by_cond.update({cond: group_pupil_across_sessions(sessions, list(sessions.keys()), 'A', cond, cond_filters, )})
@@ -454,13 +466,15 @@ if '__main__' == __name__:
      for cond, query in filters_early_late.items() if
      cond in ['alternating_early', 'alternating_late', 'random_early', 'random_late', 'normal_exp_early', 'normal_exp_late']]
 
+    # scipy.signal.filtfilt both directions all dfs in a_by_cond
+
     alternating_sessions = np.intersect1d(*[A_by_cond[cond].index.get_level_values('sess').values
                                             for cond in ['alternating', 'random']])
     alternating_sessions = [sess for sess in alternating_sessions if sess in drug_sess_dict['none'] and 'DO84' not in sess]
     alternating_sessions = [sess for sess in alternating_sessions if
                             A_by_cond['alternating'].xs(sess, level='sess').shape[0] > 50 or
                             A_by_cond['random'].xs(sess, level='sess').shape[0] > 50]
-    alternating_figdir = norm_dev_figdir.parent / f'alternating_{"_".join(cohort_tags)}'
+    alternating_figdir = norm_dev_figdir.parent / f'alternating_{"_".join(cohort_tags)}_no_filt'
     if not alternating_figdir.is_dir():
         alternating_figdir.mkdir()
 
@@ -474,7 +488,7 @@ if '__main__' == __name__:
     alt_rand_plot[0].set_layout_engine('tight')
     alt_rand_plot[0].set_size_inches(4,3)
     alt_rand_plot[0].show()
-    # alt_rand_plot[0].savefig(alternating_figdir / 'alt_rand_plot.svg')
+    alt_rand_plot[0].savefig(alternating_figdir / 'alt_rand_plot.pdf')
 
     # early late comp
     for cond in ['alternating', 'random']:
@@ -488,7 +502,7 @@ if '__main__' == __name__:
         early_late_plot[0].set_layout_engine('tight')
         early_late_plot[0].set_size_inches(4,3)
         early_late_plot[0].show()
-        # early_late_plot[0].savefig(alternating_figdir / f'{cond}_early_late_plot.svg')
+        early_late_plot[0].savefig(alternating_figdir / f'{cond}_early_late_plot.pdf')
 
     # diff plot for alternating vs random
     alternating_diff_plot = plot_pupil_diff_ts_by_cond(A_by_cond, ['random', 'alternating'],
@@ -504,7 +518,7 @@ if '__main__' == __name__:
     alternating_diff_plot[0].set_layout_engine('tight')
     alternating_diff_plot[0].set_size_inches(4,3)
     alternating_diff_plot[0].show()
-    # alternating_diff_plot[0].savefig(alternating_figdir / 'alternating_diff_plot.svg')
+    alternating_diff_plot[0].savefig(alternating_figdir / 'alternating_diff_plot.pdf')
 
     # max diff plot
     alt_rand_max_diff_plot,alt_rand_max_diff = plot_pupil_diff_max_by_cond(A_by_cond,
@@ -524,7 +538,7 @@ if '__main__' == __name__:
     alt_rand_max_diff_plot[0].set_layout_engine('tight')
     alt_rand_max_diff_plot[0].set_size_inches(3,3)
     alt_rand_max_diff_plot[0].show()
-    # alt_rand_max_diff_plot[0].savefig(alternating_figdir / 'alt_rand_max_diff_plot.svg')
+    alt_rand_max_diff_plot[0].savefig(alternating_figdir / 'alt_rand_max_diff_plot.pdf')
 
     # ttest
     ttest = ttest_1samp(alt_rand_max_diff[0],0,alternative='greater')
@@ -551,7 +565,7 @@ if '__main__' == __name__:
     alt_diff_by_name_plot[0].set_size_inches(3, 3*len(names))
     alt_diff_by_name_plot[0].set_layout_engine('tight')
     alt_diff_by_name_plot[0].show()
-#     # alternating_diff_plot[0].savefig(alternating_figdir / 'alternating_diff_plot.svg')
+    # alternating_diff_plot[0].savefig(alternating_figdir / 'alternating_diff_plot.pdf')
 
     for condition, _sessions in zip(['alternating', 'random','normal_exp'][:2],
                                     [alternating_sessions,alternating_sessions,norm_dev_sessions]):
@@ -565,7 +579,7 @@ if '__main__' == __name__:
         alt_rand_plot[0].set_layout_engine('tight')
 #         # alternating_early_late_plot[0].set_size_inches(3,3)
         alt_rand_plot[0].show()
-#         # alternating_early_late_plot[0].savefig(alternating_figdir / f'{condition}_early_late_plot.svg')
+        # alternating_early_late_plot[0].savefig(alternating_figdir / f'{condition}_early_late_plot.pdf')
 
         # diff plot
         diff_plot = plot_pupil_diff_ts_by_cond(A_by_cond, [f'{condition}_early', f'{condition}_late'],
@@ -577,7 +591,7 @@ if '__main__' == __name__:
         diff_plot[0].set_layout_engine('tight')
 #         # diff_plot[0].set_size_inches(3,3)
         diff_plot[0].show()
-#         # diff_plot[0].savefig(alternating_figdir / f'{condition}_diff_plot.svg')
+        # diff_plot[0].savefig(alternating_figdir / f'{condition}_diff_plot.pdf')
 
     # plot indv alternating sessions
     all_alt_sess_plot = plt.subplots(ncols=6,nrows=len(alternating_sessions)//6, sharex=True, sharey=True)
@@ -611,7 +625,6 @@ if '__main__' == __name__:
     rare_freq_sessions = [sess for sess in rare_freq_sessions if sess in drug_sess_dict['none']
                           and all([A_by_cond[cond].xs(sess, level='sess').shape[0]>6
                                    for cond in ['recent', 'distant']])]
-    rare_freq_figdir = norm_dev_figdir.parent / f'rare_freq_{"_".join(cohort_tags)}'
     if not rare_freq_figdir.is_dir():
         rare_freq_figdir.mkdir()
     rare_freq_plot = plot_pupil_ts_by_cond(A_by_cond, ['frequent', 'rare',], sess_list=rare_freq_sessions,
@@ -623,10 +636,10 @@ if '__main__' == __name__:
     rare_freq_plot[1].axhline(0, c='k', ls='--')
     rare_freq_plot[0].set_layout_engine('tight')
     rare_freq_plot[0].show()
-# #     # rare_freq_plot[0].savefig(rare_freq_figdir / 'rare_freq_plot.svg')
+    rare_freq_plot[0].savefig(rare_freq_figdir / 'rare_freq_plot.pdf')
 
     rare_freq_diff_by_block_plot = plt.subplots()
-    for i in range(3):
+    for i in range(2):
         plot_pupil_diff_ts_by_cond(A_by_cond, [f'rare_{i+1}', f'frequent_{i+1}'],
                                    sess_list=rare_freq_sessions,
                                    plot=rare_freq_diff_by_block_plot,)
@@ -638,13 +651,13 @@ if '__main__' == __name__:
     rare_freq_diff_by_block_plot[1].set_ylabel('')
     rare_freq_diff_by_block_plot[1].set_xlabel('')
     rare_freq_diff_by_block_plot[0].show()
-#     # # rare_freq_diff_by_block_plot[0].savefig(rare_freq_figdir / f'rare_freq_diff_by_block_{i+1}.svg')
-#     # rare_freq_diff_by_block_plot[0].savefig(rare_freq_figdir / f'rare_freq_diff_by_block.svg')
+    # # rare_freq_diff_by_block_plot[0].savefig(rare_freq_figdir / f'rare_freq_diff_by_block_{i+1}.pdf')
+    # rare_freq_diff_by_block_plot[0].savefig(rare_freq_figdir / f'rare_freq_diff_by_block.pdf')
 
 
     # plot rare frequent diff
     rare_freq_diff_plot = plot_pupil_diff_ts_by_cond(A_by_cond, ['distant', 'recent' ], sess_list=rare_freq_sessions,
-                                                     cond_line_kwargs=None)
+                                                     cond_line_kwargs=None, plot_indv_sess=True,)
     rare_freq_diff_plot[1].locator_params(axis='both', nbins=4)
     rare_freq_diff_plot[1].set_title('')
     rare_freq_diff_plot[1].set_ylabel('')
@@ -653,7 +666,7 @@ if '__main__' == __name__:
     rare_freq_diff_plot[1].axhline(0, c='k', ls='--')
     rare_freq_diff_plot[0].set_layout_engine('tight')
     rare_freq_diff_plot[0].show()
-# #     # rare_freq_diff_plot[0].savefig(rare_freq_figdir / 'rare_freq_diff_plot.svg')
+#     # rare_freq_diff_plot[0].savefig(rare_freq_figdir / 'rare_freq_diff_plot.pdf')
 
     # # plot max diff over window
     # rare_freq_max_diff_plot,rare_freq_diff_data = plot_pupil_diff_max_by_cond(A_by_cond, ['distant', 'recent', ],
@@ -681,7 +694,7 @@ if '__main__' == __name__:
                                                                                mean=np.max,
                                                                                plot_kwargs={'showfliers': False,
                                                                                             'showmeans': False,
-                                                                                            'labels': ['Pattern'],
+                                                                                            'labels': ['Pattern',],
                                                                                             'widths': 0.3
                                                                                             },
                                                                                permutation_test=True,
@@ -694,7 +707,7 @@ if '__main__' == __name__:
     rare_freq_max_diff_plot[0].set_layout_engine('tight')
     rare_freq_max_diff_plot[0].set_size_inches(2.7, 2.7)
     rare_freq_max_diff_plot[0].show()
-    rare_freq_max_diff_plot[0].savefig(rare_freq_figdir / 'rare_freq_max_diff_plot_w_shuffle.svg')
+    rare_freq_max_diff_plot[0].savefig(rare_freq_figdir / 'rare_freq_max_diff_plot_w_shuffle.pdf')
 
     # ttest
     rare_freq_max_diff_ttest = ttest_ind(rare_freq_diff_data[0][0].values, rare_freq_diff_data[1][0].values,
@@ -703,7 +716,7 @@ if '__main__' == __name__:
     print(rare_freq_max_diff_ttest)
 
     # plot rare by block num
-    rare_by_block_figdir = norm_dev_figdir.parent / f'rare_by_block_{"_".join(cohort_tags)}'
+    rare_by_block_figdir = norm_dev_figdir.parent / f'rare_by_block_{"_".join(cohort_tags)}_no_filt'
     if not rare_by_block_figdir.is_dir():
         rare_by_block_figdir.mkdir()
     for rare_freq in ['rare', 'frequent']:
@@ -724,9 +737,9 @@ if '__main__' == __name__:
         [rare_by_block_plot[1].axvspan(t, t + 0.15, fc='grey', alpha=0.1) for t in np.arange(0, 1, 0.25)]
         rare_by_block_plot[1].axhline(0, c='k', ls='--')
         rare_by_block_plot[0].set_layout_engine('tight')
-#         # rare_by_block_plot[0].set_size_inches(3,3)
+        rare_by_block_plot[0].set_size_inches(3,3)
         rare_by_block_plot[0].show()
-#         # rare_by_block_plot[0].savefig(rare_by_block_figdir / f'{rare_freq}_by_block_plot.svg')
+        rare_by_block_plot[0].savefig(rare_by_block_figdir / f'{rare_freq}_by_block_plot.pdf')
 
 
     # rare freq within block adaptation
@@ -748,6 +761,59 @@ if '__main__' == __name__:
     mega_mouse_by_cond_plot[1].axvline(0,c='k',ls='--')
     mega_mouse_by_cond_plot[0].show()
 
+    # rare freq across sess adaptation
+    # pool rare freq session across all animals by sess number
+    rare_freq_diff_data_by_sess_num = {}
+    for n_sess in [5]:
+
+        rare_freq_sess_by_animal = {name: sorted([sess for sess in rare_freq_sessions if name in sess])
+                                    for name in A_by_cond['rare'].index.get_level_values('name').unique()}
+        sufficient_animals_2_use = [name for name in rare_freq_sess_by_animal if len(rare_freq_sess_by_animal[name])>= n_sess]
+        rare_freq_sess_by_sess_num = {i:[rare_freq_sess_by_animal[name][i] for name in sufficient_animals_2_use]
+                                      for i in range(n_sess)}
+
+        # plot by sess num
+        # col map for lines
+        cmap = plt.get_cmap('Greys')
+        colors = [cmap((i+1)/n_sess) for i in range(len(rare_freq_sess_by_sess_num))]
+        rare_freq_sess_adaptaion_plot = plt.subplots()
+        for sess_i, sess_i_sessions in rare_freq_sess_by_sess_num.items():
+            # if (sess_i) % 2 == 0:
+            #     continue
+
+            plot_pupil_ts_by_cond(A_by_cond, ['rare',],
+                                  # sess_list=rare_freq_sess_by_sess_num[sess_i-1]+rare_freq_sess_by_sess_num[sess_i],
+                                  sess_list=sess_i_sessions,
+                                  plot=rare_freq_sess_adaptaion_plot,
+                                  cond_line_kwargs={'rare':{'c':colors[sess_i]}},
+                                  plot_kwargs=dict(label_sffx=f'sess {sess_i+1}')
+                                  )
+            rare_freq_diff_data_by_sess_num[sess_i] = plot_pupil_diff_max_by_cond(A_by_cond, ['frequent','rare'],sess_list=sess_i_sessions)[1][0][0]
+        format_axis(rare_freq_sess_adaptaion_plot[1],ylabel='pupil size', xlabel='Time (s)',
+                    vspan=[[t, t + 0.15] for t in np.arange(0, 1, 0.25)],vlines=[0])
+        rare_freq_sess_adaptaion_plot[0].set_layout_engine('tight')
+        rare_freq_sess_adaptaion_plot[0].set_size_inches(4,3)
+        rare_freq_sess_adaptaion_plot[1].get_legend().remove()
+        rare_freq_sess_adaptaion_plot[0].show()
+        rare_freq_sess_adaptaion_plot[0].savefig(rare_by_block_figdir / f'rare_freq_sess_adaptaion_plot_upto_{n_sess}.pdf')
+
+    # max diff by cond over sess num
+    rare_freq_diff_sess_adaptation_df = pd.DataFrame.from_dict(rare_freq_diff_data_by_sess_num,orient='index')
+    rare_freq_diff_sess_adaptation_df_from_d0 = rare_freq_diff_sess_adaptation_df.copy()
+    for animal in rare_freq_diff_sess_adaptation_df_from_d0.columns:
+        rare_freq_diff_sess_adaptation_df_from_d0[animal] = rare_freq_diff_sess_adaptation_df_from_d0[animal]-rare_freq_diff_sess_adaptation_df_from_d0.loc[0,animal]
+    rare_freq_diff_sess_adaptation_plot = plt.subplots()
+    # boxplot over rows
+    # rare_freq_diff_sess_adaptation_plot[1].boxplot(rare_freq_diff_sess_adaptation_df_from_d0.T,bootstrap=1000,whis=[1,99],showfliers=False,)
+    rare_freq_diff_sess_adaptation_plot[1].boxplot(rare_freq_diff_sess_adaptation_df.T)
+    format_axis(rare_freq_diff_sess_adaptation_plot[1],ylabel='delta pupil size', xlabel='Session Number',)
+    rare_freq_diff_sess_adaptation_plot[1].set_yticks(np.arange(0,1,0.5))
+    rare_freq_diff_sess_adaptation_plot[1].set_xticks(np.arange(n_sess)+1)
+    rare_freq_diff_sess_adaptation_plot[0].show()
+    rare_freq_diff_sess_adaptation_plot[0].set_layout_engine('tight')
+    rare_freq_diff_sess_adaptation_plot[0].set_size_inches(4,3)
+    rare_freq_diff_sess_adaptation_plot[0].savefig(rare_by_block_figdir / 'rare_freq_diff_sess_adaptation_plot.pdf')
+
 
     # rare freq interstim dist
     # use block 1 only
@@ -759,12 +825,10 @@ if '__main__' == __name__:
         interstim_by_cond = [arr[~np.isnan(arr)] for arr in interstim_by_cond]
         interstim_by_cond_plot = plt.subplots()
         bxplt = interstim_by_cond_plot[1].boxplot(interstim_by_cond,labels=['recent','distant'],showfliers=False,)
-        [patch.set_facecolor(rare_freq_cond_line_kwargs[cond]['c'])
-         for patch, cond in zip(bxplt['boxes'], ['recent','distant'])]
         interstim_by_cond_plot[0].show()
         interstim_by_cond_plot[0].set_layout_engine('tight')
         interstim_by_cond_plot[0].set_size_inches(2.7,2.7)
-        # interstim_by_cond_plot[0].savefig(rare_by_block_figdir / f'interstim_{metric}_by_cond.svg')
+        interstim_by_cond_plot[0].savefig(rare_by_block_figdir / f'interstim_{metric}_by_cond.pdf')
 
     all_sess_td_df = group_td_df_across_sessions(sessions, list(sessions.keys()))
     all_dists_df = all_sess_td_df.query(cond_filters['distant'])
@@ -827,7 +891,7 @@ if '__main__' == __name__:
     tone_time_plot[0].set_layout_engine('tight')
     # tone_time_plot[0].set_size_inches(2, 2.7)
     tone_time_plot[0].show()
-    # tone_time_plot[0].savefig(rare_by_block_figdir / 'tone_time.svg')
+    tone_time_plot[0].savefig(rare_by_block_figdir / 'tone_time.pdf')
 
     # ABCD0 vs ABCD1 vs ABBA1
     all_abstr_df = all_sess_td_df.query(cond_filters['dev_ABCD1'])
@@ -855,7 +919,7 @@ if '__main__' == __name__:
                             and A_by_cond['dev_ABCD1'].xs(sess, level='sess').shape[0] > 3]
 
     # plot pupil_ts
-    abstr_figdir = norm_dev_figdir.parent / 'abstraction'
+    abstr_figdir = norm_dev_figdir.parent / 'abstraction_no_filt'
     if not abstr_figdir.is_dir():
         abstr_figdir.mkdir()
     abstr_cond_line_kwargs = {cond: {'c': c,'lw':2} for cond, c in zip(['normal','dev_ABCD1', 'dev_ABBA1'],
@@ -873,7 +937,7 @@ if '__main__' == __name__:
     abstraction_plot[1].set_title('')
     abstraction_plot[0].set_layout_engine('tight')
     abstraction_plot[0].show()
-    # abstraction_plot[0].savefig(abstr_figdir / 'abstraction.svg')
+    abstraction_plot[0].savefig(abstr_figdir / 'abstraction.pdf')
     # plot pupil_diff
     abstraction_diff_plot = plot_pupil_diff_ts_by_cond(A_by_cond,['normal','dev_ABCD1','dev_ABBA1'],
                                                        sess_list=abstraction_sessions,invert=True,
@@ -886,7 +950,7 @@ if '__main__' == __name__:
     abstraction_diff_plot[0].set_layout_engine('tight')
     # abstraction_diff_plot[0].set_size_inches(3,3)
     abstraction_diff_plot[0].show()
-    # abstraction_diff_plot[0].savefig(abstr_figdir / 'abstraction_diff.svg')
+    abstraction_diff_plot[0].savefig(abstr_figdir / 'abstraction_diff.pdf')
 
     # plot max diff
     abstraction_max_diff_plot,abst_data = plot_pupil_diff_max_by_cond(A_by_cond,['normal','dev_ABCD1','dev_ABBA1'],
@@ -895,29 +959,30 @@ if '__main__' == __name__:
                                                             mean=np.max,
                                                             plot_kwargs={'showfliers': False,
                                                                          'showmeans': False,
-                                                                         'labels': ['dev_ABCD1', 'dev_ABBA1'],
+                                                                         'labels': ['dev_ABCD1\n', 'dev_ABBA1\n'],
                                                                          'bootstrap':1000,
                                                                          # 'title':'',
                                                                          'widths': 0.3
                                                                          },
                                                             group_name='name',
-                                                            permutation_test=True
+                                                            permutation_test=True,
+                                                            n_permutations=100
                                                             )
     # format plot
     abstraction_max_diff_plot[1].set_ylabel('')
     abstraction_max_diff_plot[1].set_title('')
     abstraction_max_diff_plot[1].locator_params(axis='y', nbins=4)
     abstraction_max_diff_plot[0].set_layout_engine('tight')
-    # abstraction_max_diff_plot[0].set_size_inches(3,3)
+    abstraction_max_diff_plot[0].set_size_inches(5,3)
     abstraction_max_diff_plot[0].show()
-    abstraction_max_diff_plot[0].savefig(abstr_figdir / 'abstraction_max_diff_w_shuffle.svg')
+    abstraction_max_diff_plot[0].savefig(abstr_figdir / 'abstraction_max_diff_w_shuffle.pdf')
 
 
     ttest_ind(abst_data[0][0],abst_data[1][0],alternative='greater')
     ttest_ind(abst_data[0][1],abst_data[1][1],alternative='greater')
     # ttest_1samp(abst_data[0],0,alternative='greater')
 
-    # dump data
+    # dump datai
     processed_pkl_dir = ceph_dir/ r'X:\Dammy\Xdetection_mouse_hf_test\processed_data'
     save_responses_dicts(A_by_cond,processed_pkl_dir/f'A_by_cond_{"_".join(cohort_tags)}.pkl')
     save_responses_dicts(X_by_cond,processed_pkl_dir/f'X_by_cond_{"_".join(cohort_tags)}.pkl')
