@@ -220,7 +220,15 @@ def correct_drift(recording,preset,rec_dir='',job_kwargs={}):
 
 
 def gen_probe_group(probe_name='ASSY-236-P-1'):
+
     manufacturer = 'cambridgeneurotech'
+
+    probes = pi.ProbeGroup()
+
+    if probe_name.endswith('.json'):
+        probe = pi.read_probeinterface(probe_name)
+        probes.add_probe(probe)
+        return probes
 
     probe1 = pi.get_probe(manufacturer, probe_name)
     probe1.wiring_to_device('cambridgeneurotech_mini-amp-64')
@@ -232,7 +240,6 @@ def gen_probe_group(probe_name='ASSY-236-P-1'):
         probe2.set_shank_ids((probe1.shank_ids.astype(int)+4).astype(str))
     # logger.debug(probe1.device_channel_indices,probe2.device_channel_indices)
     probe2.move([5000,0])
-    probes = pi.ProbeGroup()
     probes.add_probe(probe1)
     probes.add_probe(probe2)
     probes.set_global_device_channel_indices(np.concatenate([probe1.device_channel_indices,
