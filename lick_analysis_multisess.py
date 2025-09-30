@@ -2,15 +2,11 @@ from ephys_analysis_funcs import *
 import platform
 import argparse
 import yaml
-from scipy.stats import pearsonr
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-from scipy.signal import savgol_filter, correlate2d
-import ruptures as rpt
-import time
-from postprocessing_utils import get_sorting_dirs
-from datetime import datetime
+
+from io_utils import posix_from_win
 import pandas as pd
-import re
+
+from sess_dataclasses import Session
 
 
 def generate_lick_data_for_pip(sessions, pip):

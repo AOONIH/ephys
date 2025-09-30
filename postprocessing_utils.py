@@ -1,4 +1,7 @@
+import shutil
 from pathlib import Path
+
+import pandas as pd
 import spikeinterface.full as si
 import functools
 import numpy as np
@@ -6,6 +9,7 @@ from matplotlib import pyplot as plt
 from scipy import signal
 from spikeinterface.postprocessing import (compute_spike_amplitudes, compute_correlograms,compute_template_similarity,
                                            compute_unit_locations)
+from spikeinterface import create_sorting_analyzer, load_sorting_analyzer
 from spikeinterface.qualitymetrics import compute_quality_metrics
 from spikeinterface.exporters import export_report
 from spikeinterface.curation import MergeUnitsSorting, get_potential_auto_merge, CurationSorting
@@ -36,19 +40,22 @@ def get_sorting_dirs(ephys_dir:Path, sess_name_date, sorting_dir_name, sorter_di
 
 
 def get_sorting_objs(sorting_dirs):
-    sorter_outputs = [si.load_extractor(next(folder.glob('si_output')) if folder.stem != 'si_output' else folder)
+    sorter_outputs = [si.read_numpy_sorting_folder(next(folder).parent if folder.stem != 'si_output' else folder)
                       for folder in sorting_dirs]
     recording_dirs = [folder.parent.parent / 'preprocessed' for folder in sorting_dirs]
-    recordings = [si.load_extractor(recording_dir) for recording_dir in recording_dirs]
+    recordings = [si.read_binary_folder(recording_dir) for recording_dir in recording_dirs]
     [recording.annotate(is_filtered=True) for recording in recordings]
     return sorter_outputs, recordings
 
 
 def get_waveforms(recording, sorting, we_dir:Path, **kwargs):
-    if not we_dir.is_dir():
-        waveforms = si.extract_waveforms(recording, sorting, we_dir, **kwargs)
+    if not we_dir.is_dir() or kwargs.get('overwrite', True):
+        waveforms = si.extract_waveforms(recording, sorting, we_dir,overwrite=None,**kwargs)
     else:
-        waveforms = si.load_waveforms(we_dir)
+        try:
+            waveforms = si.load_waveforms(we_dir)
+        except:
+            waveforms = si.extract_waveforms(recording, sorting, we_dir, overwrite=None, **kwargs)
     return waveforms
 
 
@@ -102,50 +109,38 @@ def get_probe_power(probes_df,rec_segment,fs,f_band=(0, 200)):
 
 
 def postprocess(recording, sorting, sort_dir:Path):
+    sorting = sorting.remove_empty_units()
     print(f'Postprocessing {sort_dir.parent}')
-    we_dir = sort_dir.parent / 'waveforms'
-    we = get_waveforms(recording, sorting, we_dir, verbose=False)
-    _ = compute_spike_amplitudes(waveform_extractor=we)
-    _ = compute_correlograms(we)
-    _ = compute_unit_locations(waveform_extractor=we)
-    _ = compute_quality_metrics(waveform_extractor=we, metric_names=['snr', 'isi_violation', 'presence_ratio'])
-    _ = compute_template_similarity(we)
-    print(f'Exporting report for {sort_dir.parent}')
-    export_report(waveform_extractor=we, output_folder=sort_dir.parent / 'si_report', remove_if_exists=True,
-                  format='svg',
-                  n_jobs=os.cpu_count() - 1)
-
-    merges, extra = get_potential_auto_merge(we, extra_outputs=True)
-    if merges:
-        clean_sorting = MergeUnitsSorting(parent_sorting=sorting, units_to_merge=merges)
-
-        we = get_waveforms(recording=recording, sorting=clean_sorting, we_dir=sort_dir.parent / 'waveforms_auto_merge',
-                           verbose=False)
-        export_report(waveform_extractor=we, output_folder=sort_dir.parent / 'si_report_auto_merge',
-                      remove_if_exists=True,
-                      format='svg', n_jobs=os.cpu_count() - 1)
+    # recs_by_group = recording.split_by('shank_id')
+    recs_by_group = {0:recording}
+    print(f'{recs_by_group = }')
+    good_units_by_group = {}
+    if len(recs_by_group) > 1:
+        we_dir_sffx = [f'group_{i}' for i in range(len(recs_by_group))]
     else:
-        clean_sorting = sorting
+        we_dir_sffx = ['']
+    # for ri,rec in enumerate(recs_by_group.values()):
+    we_dir = sort_dir.parent / f'waveforms'
 
-    _ = compute_spike_amplitudes(waveform_extractor=we)
-    _ = compute_correlograms(we)
-    _ = compute_unit_locations(waveform_extractor=we)
-    _ = compute_template_similarity(we)
-    cm = compute_quality_metrics(waveform_extractor=we, metric_names=['snr', 'isi_violation',
-                                                                      'presence_ratio', 'firing_rate'])
+    analyzer = create_sorting_analyzer(recording=recording, sorting=sorting, format='memory',
+                                       folder=we_dir)
+    sparsity = si.compute_sparsity(analyzer, method="by_property", by_property='shank_id')
 
-    filtered_units_df = cm.query('presence_ratio > 0.85 & (snr>=5 or isi_violations_ratio < 0.1)')
-    filtered_units_df.index.to_frame().to_csv(sort_dir.parent / 'good_units.csv', index=False)
-    sorting_good_units = clean_sorting.select_units(filtered_units_df.index.to_numpy())
-    we = we.select_units(filtered_units_df.index.to_list())
-    export_report(waveform_extractor=we, output_folder=sort_dir.parent / 'si_report_good_units',
-                  remove_if_exists=True,
-                  format='svg', n_jobs=os.cpu_count() - 1)
-    try:
-        plots = get_shank_spectrum_by_depth(recording)
-        [plot[0].savefig(sort_dir.parent / f'shank_spectrum_{i}.svg') for i,plot in enumerate(plots)]
-    except:
-        pass
+    analyzer = create_sorting_analyzer(recording=recording, sorting=sorting, format='memory',
+                                       folder=we_dir, sparsity=sparsity)
+
+    analyzer.compute(['random_spikes', 'waveforms', 'templates', 'noise_levels'])
+    analyzer.compute(['spike_amplitudes', 'correlograms', 'template_similarity', 'quality_metrics'],
+                     extension_params=dict(
+                     quality_metrics=dict(metric_names=['snr', 'isi_violation', 'presence_ratio']),
+                     ), n_jobs=16,
+                     )
+
+    # the export process
+    if (sort_dir.parent / f'si_report').exists():
+        shutil.rmtree(sort_dir.parent / f'si_report', ignore_errors=True)
+    export_report(sorting_analyzer=analyzer, output_folder=sort_dir.parent/f'si_report',
+                  remove_if_exists=True, format='png')
 
 
 def get_shank_spectrum_by_depth(recording):

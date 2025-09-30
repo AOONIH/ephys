@@ -5,7 +5,7 @@ import spikeinterface.full as si
 import argparse
 import yaml
 import platform
-from ephys_analysis_funcs import posix_from_win
+from io_utils import posix_from_win
 from spikeinterface import comparison as sc, widgets as sw
 from datetime import datetime
 import functools

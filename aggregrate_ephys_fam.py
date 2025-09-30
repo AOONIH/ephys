@@ -1,27 +1,18 @@
-import argparse
-import pickle
-import platform
 from itertools import combinations
-from pathlib import Path
 
 import matplotlib
-import numpy as np
-import pandas as pd
-import yaml
 from matplotlib import pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
-from scipy.stats import ttest_ind, ttest_1samp, sem, tukey_hsd
-from sklearn.feature_selection import mutual_info_classif
-from sklearn.metrics import ConfusionMatrixDisplay
-from sklearn.metrics.pairwise import cosine_similarity
-
+from scipy.stats import ttest_1samp, sem
 
 from aggregate_ephys_funcs import *
 from behviour_analysis_funcs import get_all_cond_filts, get_n_since_last, get_prate_block_num, get_cumsum_columns, \
     add_datetimecol, get_lick_in_patt_trials, get_earlyX_trials, get_last_pattern
-from ephys_analysis_funcs import posix_from_win, plot_2d_array_with_subplots, plot_psth, format_axis, plot_sorted_psth
-from neural_similarity_funcs import plot_similarity_mat
+from io_utils import posix_from_win
+from plot_funcs import plot_2d_array_with_subplots, plot_sorted_psth, format_axis
+from population_analysis_funcs import PopPCA
 from regression_funcs import run_glm
+from unit_analysis import get_participation_rate
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()
@@ -78,9 +69,9 @@ if '__main__' == __name__:
 
     window = (-0.1, 0.25)
     hipp_animals = ['DO79','DO81']
-    event_responses = aggregate_event_reponses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
-                                               events2exclude=['trial_start',], window=window,
-                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
+    event_responses = aggregate_event_responses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
+                                                events2exclude=['trial_start',], window=window,
+                                                pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
                                                                       'baseline': 0, 'mean': None, 'mean_axis': 0})
     concatenated_event_responses = {
         e: np.concatenate([event_responses[sessname][e].mean(axis=0) for sessname in event_responses])
@@ -100,10 +91,10 @@ if '__main__' == __name__:
     if not psth_figdir.is_dir():
         psth_figdir.mkdir()
     full_patt_window = (-1, 2)
-    full_pattern_responses_4_psth = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=full_patt_window,
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses_4_psth = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                                if 'A' in e],
+                                                              events2exclude=['trial_start'], window=full_patt_window,
+                                                              pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
@@ -112,9 +103,9 @@ if '__main__' == __name__:
                            for sessname in full_pattern_responses_4_psth])
         for e in [e for e in concatenated_event_responses.keys() if 'A' in e]}
 
-    event_responses_4_psth = aggregate_event_reponses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
-                                               events2exclude=None, window=[-0.25,1],
-                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
+    event_responses_4_psth = aggregate_event_responses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
+                                                       events2exclude=None, window=[-0.25,1],
+                                                       pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
                                                                       'baseline': 0, 'mean': None, 'mean_axis': 0})
     concatenated_event_responses_4_psth = {
         e: np.concatenate([event_responses_4_psth[sessname][e].mean(axis=0) for sessname in event_responses_4_psth])
@@ -125,8 +116,9 @@ if '__main__' == __name__:
                            for sessname in event_responses_4_psth])
         for e in list(event_responses_4_psth.values())[0].keys()}
 
-
-    psth_figdir = aggr_figdir.parent / 'psth_plots_aggr_sessions'
+    psth_figdir = aggr_figdir.parent / 'psth_plots_aggr_sessions_odd_even_cv'
+    if not psth_figdir.is_dir():
+        psth_figdir.mkdir()
     for pip in [e for e in concatenated_event_responses.keys() if 'A' in e]:
         for animal in hipp_animals:
             cmap_norm = TwoSlopeNorm(vcenter=0, vmin=-1, vmax=1)
@@ -140,7 +132,7 @@ if '__main__' == __name__:
             all_resps_psth[1][0].locator_params(axis='y', nbins=2)
             all_resps_psth[0].show()
 
-            all_resps_psth[0].savefig(psth_figdir / f'{pip}_{animal}_A_resps_psth_aggr_fam_sessions_cv_sort.pdf')
+            all_resps_psth[0].savefig(psth_figdir / f'{pip}_{animal}_A_resps_psth_aggr_fam_sessions_cv_sort_v2.pdf')
 
     pips_2_plot = ['base','X','trial_start'][:]
     for pip in pips_2_plot:
@@ -157,7 +149,7 @@ if '__main__' == __name__:
 
         psth_plot[0].show()
 
-        psth_plot[0].savefig(psth_figdir / f'{pip}_all_resps_psth_aggr_fam_sessions_cv_sort.pdf')
+        psth_plot[0].savefig(psth_figdir / f'{pip}_all_resps_psth_aggr_fam_sessions_cv_sort_v2.pdf')
 
     # psth for miss trials only
     miss_trials_idxs_by_sess = {sess: event_features[sess]['X']['td_df'].eval(cond_filters['miss_all'])
@@ -186,7 +178,7 @@ if '__main__' == __name__:
 
         psth_plot[0].show()
 
-        psth_plot[0].savefig(psth_figdir / f'{pip}_resps_psth_aggr_fam_sessions.pdf')
+        psth_plot[0].savefig(psth_figdir / f'{pip}_resps_psth_aggr_fam_sessions_v2.pdf')
 
     for sess in resps_miss_trials:
         event_responses[sess]['X_miss'] = resps_miss_trials[sess]['X_miss']
@@ -196,10 +188,10 @@ if '__main__' == __name__:
         e: [event_responses[sessname][e] for sessname in event_responses]
         for e in list(event_responses.values())[0].keys() if e != 'X_miss'}
 
-    full_pattern_responses = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                         if 'A' in e],
+                                                       events2exclude=['trial_start'], window=[-0.25, 1],
+                                                       pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
@@ -393,10 +385,10 @@ if '__main__' == __name__:
                                               events2exclude=['trial_start'])
 
 
-    full_pattern_responses = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                         if 'A' in e],
+                                                       events2exclude=['trial_start'], window=[-0.25, 1],
+                                                       pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
@@ -411,7 +403,7 @@ if '__main__' == __name__:
             dec_sffx = "_vs_".join(pips)
             xs_list = [event_responses[sessname][pip] for pip in pips]
             xs = np.vstack([x[:,:,10:].mean(axis=-1) for x in xs_list])
-            ys = np.hstack([np.full(x.shape[0], ci) for ci, x in enumerate(xs_list)])
+            ys = np.hstack([np.full(x.shape[0], ci) for ci,x in enumerate(xs_list)])
             decode_patt_base_dict[f'{sessname}_{dec_sffx}'] = decode_responses(xs, ys, n_runs=100)
         # plot accuracy
         patt_v_base_accuracy = np.array([decode_patt_base_dict[dec_name]['data'].accuracy
@@ -842,12 +834,12 @@ if '__main__' == __name__:
     window_size = 0.1
     # plot decoding over time
     dec_over_time_window = [-1, 1.5]
-    full_pattern_responses_4_ts_dec = aggregate_event_reponses(sessions,
-                                                               events=[e for e in concatenated_event_responses.keys()
+    full_pattern_responses_4_ts_dec = aggregate_event_responses(sessions,
+                                                                events=[e for e in concatenated_event_responses.keys()
                                                                        if 'A' in e],
-                                                               events2exclude=['trial_start'],
-                                                               window=dec_over_time_window,
-                                                               pred_from_psth_kwargs={'use_unit_zscore': True,
+                                                                events2exclude=['trial_start'],
+                                                                window=dec_over_time_window,
+                                                                pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                                       'use_iti_zscore': False,
                                                                                       'baseline': 0, 'mean': None,
                                                                                       'mean_axis': 0})
@@ -888,11 +880,11 @@ if '__main__' == __name__:
 
 
     # get active units
-    event_responses_4_active_units = aggregate_event_reponses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
-                                               events2exclude=['trial_start',], window=window,
-                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
+    event_responses_4_active_units = aggregate_event_responses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
+                                                               events2exclude=['trial_start',], window=window,
+                                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
                                                                       'baseline': 0, 'mean': None, 'mean_axis': 0})
-    active_units_by_pip = {pip: np.hstack([get_active_units(event_responses[sess][pip],[-0.1,0.25],
+    active_units_by_pip = {pip: np.hstack([get_participation_rate(event_responses[sess][pip],[-0.1,0.25],
                                                             [0.1,0.25],2,max_func=np.max)
                                            for sess in event_responses_4_active_units
                                            if any(e in sess for e in hipp_animals)])
@@ -1038,7 +1030,7 @@ if '__main__' == __name__:
         e: np.concatenate([sem(full_resps_by_cond_by_pip[e][sessname]) for sessname in rare_freq_sess
                            if any([animal in sessname for animal in hipp_animals])])
         for e in pips_by_cond}
-    x_ser = np.round(np.linspace(*full_patt_window,concat_rare_freq_hipp_only[f'A-0_rare'].shape[-1]),2)
+    x_ser = np.round(np.linspace(*full_patt_window,concat_rare_freq_hipp_only[f'A-0_{cond}'].shape[-1]),2)
 
     # pca
     full_pattern_pca = PopPCA({'by_rate':concat_rare_freq_hipp_only})
@@ -1058,7 +1050,7 @@ if '__main__' == __name__:
     #plot 3d projections
     full_pattern_pca.plot_3d_pca_ts('by_rate',[-1,2],x_ser=x_ser,smoothing=10,pca_comps_2plot=[0,2,1],t_end=1,
                                     plot_out_event=True)
-    full_pattern_pca.proj_3d_plot.savefig(f'full_pattern_pca_3d_plot_aggregate_sessions.pdf')
+    full_pattern_pca.proj_3d_plot[0].savefig(f'full_pattern_pca_3d_plot_aggregate_sessions.pdf')
     # get [0,1,2] components can compute euc distance over time
     pca_ts_0_1_2 = {e: full_pattern_pca.projected_pca_ts_by_cond['by_rate'][e][[0, 1, 2]]
                     for e in full_pattern_pca.projected_pca_ts_by_cond['by_rate'].keys()}
@@ -1079,8 +1071,7 @@ if '__main__' == __name__:
 
 
 
-
-    active_units_by_pip_rare_freq = {pip: np.hstack([get_active_units(full_resps_by_cond_by_pip[pip][sess],
+    active_units_by_pip_rare_freq = {pip: np.hstack([get_participation_rate(full_resps_by_cond_by_pip[pip][sess],
                                                                       full_patt_window,
                                                             [0.1, 0.25], 2, max_func=np.max)
                                            for sess in rare_freq_sess if any(e in sess for e in hipp_animals)
@@ -1243,3 +1234,40 @@ if '__main__' == __name__:
     rare_freq_dec_ts_plot[0].set_size_inches((3, 2))
     rare_freq_dec_ts_plot[0].show()
     # rare_freq_dec_ts_plot[0].savefig(aggr_figdir / f'rare_freq_dec_ts{"_".join(conds)}.pdf')
+#
+# def get_responses_by_pip_and_condition(pip_names, event_responses, event_features, conds, cond_filters):
+#     """
+#     Returns a dictionary with keys '{pip}_{cond}' and values as dicts: {sessname: response array}.
+#     Args:
+#         pip_names (list): List of pip event names (e.g. ['A-0', 'B-0']).
+#         event_responses (dict): Nested dict of session -> event -> response arrays.
+#         event_features (dict): Nested dict of session -> event -> features (e.g. 'td_df').
+#         conds (list): List of condition names (must be keys in cond_filters).
+#         cond_filters (dict): Dictionary mapping condition names to query strings.
+#     Returns:
+#         dict: {f'{pip}_{cond}': {sessname: response array}}
+#     """
+#     responses_by_pip_cond = {}
+#     for cond in conds:
+#         cond_query = cond_filters[cond]
+#         for pip in pip_names:
+#             key = f"{pip}_{cond}"
+#             responses_by_pip_cond[key] = {}
+#             for sessname in event_responses:
+#                 # Check if pip and cond exist for this session
+#                 if pip not in event_responses[sessname]:
+#                     continue
+#                 if pip not in event_features[sessname]:
+#                     continue
+#                 td_df = event_features[sessname][pip].get('td_df', None)
+#                 if td_df is None:
+#                     continue
+#                 try:
+#                     trial_mask = td_df.eval(cond_query)
+#                 except Exception:
+#                     continue
+#                 # Only keep if enough trials
+#                 if trial_mask.sum() < 1:
+#                     continue
+#                 responses_by_pip_cond[key][sessname] = event_responses[sessname][pip][trial_mask.values]
+#     return responses_by_pip_cond

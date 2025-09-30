@@ -14,7 +14,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from aggregate_ephys_funcs import *
 from behviour_analysis_funcs import get_all_cond_filts, get_n_since_last, get_prate_block_num, get_cumsum_columns, \
     add_datetimecol, get_lick_in_patt_trials, get_earlyX_trials, get_last_pattern
-from ephys_analysis_funcs import posix_from_win, plot_2d_array_with_subplots, plot_psth, format_axis
+from io_utils import posix_from_win
+from plot_funcs import plot_2d_array_with_subplots, plot_psth, format_axis
 from neural_similarity_funcs import plot_similarity_mat
 from regression_funcs import run_glm
 
@@ -62,9 +63,9 @@ if '__main__' == __name__:
         aggr_figdir.mkdir()
 
     window = (-0.1, 0.25)
-    event_responses = aggregate_event_reponses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
-                                               events2exclude=['trial_start',], window=window,
-                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
+    event_responses = aggregate_event_responses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
+                                                events2exclude=['trial_start',], window=window,
+                                                pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
                                                                       'baseline': 0, 'mean': None, 'mean_axis': 0})
     concatenated_event_responses = {
         e: np.concatenate([event_responses[sessname][e].mean(axis=0) for sessname in event_responses])
@@ -78,10 +79,10 @@ if '__main__' == __name__:
     psth_figdir = aggr_figdir.parent / 'psth_plots_aggr_sessions_normdev'
     if not psth_figdir.is_dir():
         psth_figdir.mkdir()
-    full_pattern_responses_4_psth = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': False,
+    full_pattern_responses_4_psth = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                                if 'A' in e],
+                                                              events2exclude=['trial_start'], window=[-0.25, 1],
+                                                              pred_from_psth_kwargs={'use_unit_zscore': False,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0.25, 'mean': None,
                                                                              'mean_axis': 0})
@@ -90,9 +91,9 @@ if '__main__' == __name__:
                            for sessname in full_pattern_responses_4_psth])
         for e in [e for e in concatenated_event_responses.keys() if 'A' in e]}
 
-    event_responses_4_psth = aggregate_event_reponses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
-                                               events2exclude=['trial_start', ], window=window,
-                                               pred_from_psth_kwargs={'use_unit_zscore': False, 'use_iti_zscore': False,
+    event_responses_4_psth = aggregate_event_responses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
+                                                       events2exclude=['trial_start', ], window=window,
+                                                       pred_from_psth_kwargs={'use_unit_zscore': False, 'use_iti_zscore': False,
                                                                       'baseline': 0.1, 'mean': None, 'mean_axis': 0})
     concatenated_event_responses_4_psth = {
         e: np.concatenate([event_responses_4_psth[sessname][e].mean(axis=0) for sessname in event_responses_4_psth])
@@ -155,10 +156,10 @@ if '__main__' == __name__:
         e: [event_responses[sessname][e] for sessname in event_responses]
         for e in list(event_responses.values())[0].keys()}
 
-    full_pattern_responses = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': False,
+    full_pattern_responses = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                         if 'A' in e],
+                                                       events2exclude=['trial_start'], window=[-0.25, 1],
+                                                       pred_from_psth_kwargs={'use_unit_zscore': False,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
@@ -271,10 +272,10 @@ if '__main__' == __name__:
                                               events2exclude=['trial_start'])
 
 
-    full_pattern_responses = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                         if 'A' in e],
+                                                       events2exclude=['trial_start'], window=[-0.25, 1],
+                                                       pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})

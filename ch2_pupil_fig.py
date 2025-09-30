@@ -13,12 +13,13 @@ from scipy.signal import savgol_filter
 from scipy.stats import ttest_ind, sem, permutation_test, ttest_1samp
 from tqdm import tqdm
 
-from behviour_analysis_funcs import get_all_cond_filts, get_drug_dates
-from ephys_analysis_funcs import posix_from_win, Session, get_main_sess_patterns
+from behviour_analysis_funcs import get_all_cond_filts, get_drug_dates, get_main_sess_patterns
+from sess_dataclasses import Session
+from io_utils import posix_from_win
 
 import yaml
 
-from pupil_ephys_funcs import plot_pupil_diff_across_sessions, plot_pupil_diff_max_by_cond
+from pupil_analysis_funcs import plot_pupil_diff_across_sessions, plot_pupil_diff_max_by_cond
 
 if '__main__' == __name__:
 

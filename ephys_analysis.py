@@ -1,18 +1,17 @@
 import matplotlib
+
+from io_utils import get_spikedir
+from plot_funcs import plot_psth_ts, plot_ts_var
+from sess_dataclasses import get_predictor_from_psth
+
 matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
-import numpy as np
 
 from ephys_analysis_funcs import *
 import platform
 import argparse
 import yaml
 from scipy.stats import pearsonr
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-from scipy.signal import savgol_filter, correlate2d
-import ruptures as rpt
-import time
-
+from scipy.signal import savgol_filter
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -219,7 +218,7 @@ if __name__ == "__main__":
     sessions[sessname].decoders[all_dec_name].cm_plot[0].savefig(ephys_figdir/
                                                                  f'ABCD_cm_no_base_{sessname}.svg')
 
-    sessions[sessname].decoders[all_dec_name].plot_decoder_accuracy( all_dec_lbls,)
+    plot_funcs.plot_decoder_accuracy(all_dec_lbls, )
     sessions[sessname].decoders[all_dec_name].accuracy_plot[0].savefig(ephys_figdir/
                                                                  f'all_vs_all_accuracy_no_base_{sessname}.svg')
 
@@ -256,7 +255,7 @@ if __name__ == "__main__":
     sessions[sessname].decoders[all_dec_name].cm_plot[0].savefig(ephys_figdir/
                                                                  f'ABCD_base_cm_{sessname}.svg')
 
-    sessions[sessname].decoders[all_dec_name].plot_decoder_accuracy(all_dec_lbls, )
+    plot_funcs.plot_decoder_accuracy(all_dec_lbls, )
     sessions[sessname].decoders[all_dec_name].accuracy_plot[0].savefig(ephys_figdir/
                                                                        f'all_vs_all_accuracy_{sessname}.svg')
 

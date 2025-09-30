@@ -9,8 +9,9 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from aggregate_ephys_funcs import load_aggregate_td_df
-from behviour_analysis_funcs import get_sess_name_date_idx
-from ephys_analysis_funcs import posix_from_win, get_main_sess_patterns, Session, get_main_sess_td_df
+from behviour_analysis_funcs import get_sess_name_date_idx, get_main_sess_patterns, get_main_sess_td_df
+from sess_dataclasses import Session
+from io_utils import posix_from_win
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()

@@ -1,14 +1,10 @@
-import multiprocessing
-
-import matplotlib.pyplot as plt
-import numpy as np
-
 from ephys_analysis_funcs import *
 import platform
 import argparse
 import yaml
-from scipy.stats import pearsonr
 
+from io_utils import posix_from_win
+from plot_funcs import plot_psth, plot_psth_ts, plot_ts_var
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

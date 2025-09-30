@@ -10,8 +10,8 @@ import yaml
 from matplotlib import pyplot as plt
 from scipy.stats import ttest_ind, tukey_hsd
 
-from ephys_analysis_funcs import posix_from_win
-from pupil_ephys_funcs import plot_pupil_diff_across_sessions
+from io_utils import posix_from_win
+from pupil_analysis_funcs import plot_pupil_diff_across_sessions
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()

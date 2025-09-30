@@ -12,8 +12,7 @@ from pathlib import Path
 from datetime import datetime
 
 from postprocessing_utils import get_sorting_dirs, get_sorting_objs
-from ephys_analysis_funcs import plot_2d_array_with_subplots
-
+from plot_funcs import plot_2d_array_with_subplots
 
 plt.close('all')
 

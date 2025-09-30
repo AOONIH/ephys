@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 import yaml
-from ephys_analysis_funcs import posix_from_win
+from io_utils import posix_from_win
 
 
 def check_pupil_data(sessname:str, ceph_dir:Path) -> None:

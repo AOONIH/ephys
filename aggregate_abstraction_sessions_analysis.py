@@ -1,20 +1,14 @@
-import pickle
-from copy import copy
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
 from matplotlib.colors import TwoSlopeNorm
-from scipy.stats import ttest_ind, ttest_1samp, f_oneway, tukey_hsd
-from sklearn.feature_selection import mutual_info_classif
-from sklearn.metrics import mutual_info_score
+from scipy.stats import ttest_1samp, tukey_hsd
 from sklearn.metrics.pairwise import cosine_similarity
 
 from aggregate_ephys_funcs import *
-from ephys_analysis_funcs import get_pip_desc, format_axis, plot_sorted_psth
-from neural_similarity_funcs import get_list_pips_by_property, plot_similarity_mat, compute_self_similarity, \
-    compare_pip_sims_2way, plot_sim_by_grouping
-from population_analysis_funcs import compute_mi
+from io_utils import posix_from_win, load_pupil_data
+from plot_funcs import plot_sorted_psth, format_axis
+from neural_similarity_funcs import plot_similarity_mat, compare_pip_sims_2way
+from population_analysis_funcs import PopPCA
+from pupil_analysis_funcs import init_sess_pupil_obj
+
 # from npeet import entropy_estimators as ee
 # from pyentrp import entropy as ent
 
@@ -63,25 +57,57 @@ if '__main__' == __name__:
     # update styles
     plt.style.use('figure_stylesheet.mplstyle')
 
-    full_pattern_responses = aggregate_event_reponses(sessions, events=None,
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses = aggregate_event_responses(sessions, events=None,
+                                                       events2exclude=['trial_start'], window=[-0.25, 1],
+                                                       pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
 
     # dump full pattern responses
+    # assert False
     full_patt_dict_path = ceph_dir / Path(posix_from_win(r'X:\for_will')) / 'full_patt_dict_ABCD_vs_ABBA.pkl'
     if not full_patt_dict_path.is_file():
         with open(full_patt_dict_path, 'wb') as f:
             pickle.dump(full_pattern_responses, f)
+
+    # load pupil data
+    pupil_pkl_paths = [ceph_dir / posix_from_win(p) for p in [
+
+        r'X:\Dammy\mouse_pupillometry\pickles\mouse_hf_ephys_2024_allsess_v2409_walt_fam_2d_90Hz_hpass00_lpass0_TOM.pkl',
+    ]]
+
+    all_pupil_data = [load_pupil_data(pkl_path) for pkl_path in pupil_pkl_paths]
+    pupil_data_dict = all_pupil_data[0]
+    for sessname in list(pupil_data_dict.keys()):
+        if any([e[:-1] in sessname for e in list(sessions.keys())]):
+            pupil_data_dict[f'{sessname}a'] = pupil_data_dict.pop(sessname)
+        else:
+            pupil_data_dict.pop(sessname)
+    for sessname in list(sessions.keys()):
+        if sessname not in list(pupil_data_dict.keys()):
+            sessions.pop(sessname)
+    for sessname in tqdm(list(sessions.keys()), desc='processing sessions'):
+        if sessions[sessname].pupil_obj:
+            continue
+        print(sessname)
+
+        init_sess_pupil_obj(sessions, sessname, ceph_dir, all_sess_info, pupil_data_dict)
+
+
     # assert False
 
     window = (-0.1, 0.25)
-    event_responses = aggregate_event_reponses(sessions,
-                                               events2exclude=['trial_start'], window=window,
-                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
+    event_responses = aggregate_event_responses(sessions,
+                                                events2exclude=['trial_start'], window=window,
+                                                pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
                                                                       'baseline': 0, 'mean': None, 'mean_axis': 0})
+
+    # dump event responses
+    event_resp_dict_path = ceph_dir / Path(posix_from_win(r'X:\for_will')) / 'by_pip_resp_dict_ABCD_vs_ABBA.pkl'
+    if not event_resp_dict_path.is_file():
+        with open(event_resp_dict_path, 'wb') as f:
+            pickle.dump(event_responses, f)
 
     event_features = aggregate_event_features(sessions,
                                               events2exclude=['trial_start'])
@@ -92,6 +118,37 @@ if '__main__' == __name__:
     concatenated_event_times = {
         e: np.concatenate([(event_features[sessname][e]['times']) for sessname in event_features])
         for e in list(event_features.values())[0].keys()}
+
+    # get pupil epochs
+    aligned_pupil_epochs = {}
+    for sessname in tqdm(list(sessions.keys()), desc='getting pupil epochs', total=len(sessions)):
+        aligned_pupil_epochs[sessname] = {pip: [sessions[sessname].pupil_obj.pupil_data.loc[t -1:t + 3]['dlc_radii_a_zscored']
+                                                         for t in event_features[sessname][pip]['times']]
+                                          for pip in ['A-0','A-1','A-2','A-3']}
+    aligned_pupil_epochs = {}
+    max_len = 364
+
+    for sessname in tqdm(list(sessions.keys()), desc='getting pupil epochs', total=len(sessions)):
+        aligned_pupil_epochs[sessname] = {}
+
+        for pip in ['A-0', 'A-1', 'A-2', 'A-3']:
+            trial_data = []
+
+            for t in event_features[sessname][pip]['times']:
+                series = sessions[sessname].pupil_obj.pupil_data.loc[t - 1:t + 3]['dlc_radii_a_zscored']
+                arr = series.to_numpy()
+
+                # Pad to max_len with NaNs
+                padded = np.full(max_len, np.nan)
+                padded[:len(arr)] = arr
+                trial_data.append(padded)
+
+            # Convert list of padded arrays into a 2D array
+            aligned_pupil_epochs[sessname][pip] = np.vstack(trial_data)
+
+    # dump
+    with open(ceph_dir / Path(posix_from_win(r'X:\for_will'))/ 'aligned_pupil_epochs.pkl', 'wb') as f:
+        pickle.dump(aligned_pupil_epochs, f)
 
     #
     # get n_units
@@ -183,9 +240,9 @@ if '__main__' == __name__:
 
     # mutual info
     events = [f'{pip}-{i}' for i in range(4) for pip in 'ABCD']
-    resps2use = aggregate_event_reponses(sessions,
-                                               events2exclude=['trial_start'], window=window,
-                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
+    resps2use = aggregate_event_responses(sessions,
+                                          events2exclude=['trial_start'], window=window,
+                                          pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
                                                                       'baseline': 0, 'mean': None, 'mean_axis': 0})
     # resps2use = full_pattern_responses
     # window2use= [-0.25, 1]
@@ -469,10 +526,10 @@ if '__main__' == __name__:
 
     sim_ts_plot[0].show()
 
-    full_pattern_responses_4_psth = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses_4_psth = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                                if 'A' in e],
+                                                              events2exclude=['trial_start'], window=[-0.25, 1],
+                                                              pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})

@@ -1,16 +1,12 @@
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-
+from decoding_funcs import get_decoder_accuracy_from_pkl, get_property_from_decoder_pkl
 from ephys_analysis_funcs import *
 import argparse
 import yaml
 import platform
 import multiprocessing
 from functools import partial
-from queue import Queue
-import functools
 
+from io_utils import posix_from_win
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

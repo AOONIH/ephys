@@ -2,7 +2,7 @@ import matplotlib
 import numpy as np
 from matplotlib import pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
-from ephys_analysis_funcs import plot_2d_array_with_subplots
+from plot_funcs import plot_2d_array_with_subplots
 from itertools import combinations
 from tqdm import tqdm
 from copy import deepcopy as copy
@@ -132,3 +132,13 @@ def plot_sim_by_grouping(sim_mat,grouping,pip_desc,cmap='Reds',plot=None,im_kwar
                                    plot=plot)
 
     return sim_plot
+
+
+def multi_pearsonr(x, y):
+    xmean = x.mean(axis=1)
+    ymean = y.mean()
+    xm = x - xmean[:, None]
+    ym = y - ymean
+    normxm = np.linalg.norm(xm, axis=1)
+    normym = np.linalg.norm(ym)
+    return np.clip(np.dot(xm / normxm[:, None], ym / normym), -1.0, 1.0)

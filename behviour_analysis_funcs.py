@@ -8,7 +8,9 @@ from matplotlib import legend_handler
 from matplotlib.lines import Line2D
 from tqdm import tqdm
 
-from ephys_analysis_funcs import SessionPupil, Session, get_main_sess_patterns
+from io_utils import split_path_cross_platform
+from reformat_dir_struct import extract_date
+from sess_dataclasses import SessionPupil, Session
 
 if '__main__' == __name__:
     pass
@@ -26,10 +28,7 @@ class MyHandlerLine2D(legend_handler.HandlerLine2D):
         legline = Line2D(xdata, ydata)
 
         self.update_prop(legline, orig_handle, legend)
-        #legline.update_from(orig_handle)
-        #legend._set_artist_props(legline) # after update
-        #legline.set_clip_box(None)
-        #legline.set_clip_path(None)
+
         legline.set_drawstyle('default')
         legline.set_marker("")
         legline.set_linewidth(3)
@@ -37,10 +36,7 @@ class MyHandlerLine2D(legend_handler.HandlerLine2D):
 
         legline_marker = Line2D(xdata_marker, ydata[:len(xdata_marker)])
         self.update_prop(legline_marker, orig_handle, legend)
-        #legline_marker.update_from(orig_handle)
-        #legend._set_artist_props(legline_marker)
-        #legline_marker.set_clip_box(None)
-        #legline_marker.set_clip_path(None)
+
         legline_marker.set_linestyle('None')
         if legend.markerscale != 1:
             newsz = legline_marker.get_markersize()*legend.markerscale
@@ -64,16 +60,26 @@ def get_sess_name_date_idx(sessname,session_topology):
 
 
 def sync_beh2sound(pupil_obj:SessionPupil,beh_events_df:pd.DataFrame, sound_events_df:pd.DataFrame):
-    sync_offset =  sound_events_df['Timestamp'].values[0] - beh_events_df['Timestamp'].values[0]
+    valve_t0 = beh_events_df[beh_events_df['PORT1_12V']==True]['Times'].iloc[0]
+    rew_tone_t0 = sound_events_df[sound_events_df['Payload']==5]['Timestamp'].iloc[0]
+    sync_offset =  rew_tone_t0 - valve_t0
     print(f'sync_offset = {sync_offset}')
     pupil_obj.sound_writes.loc[:,'Timestamp'] = pupil_obj.sound_writes['Timestamp'] - sync_offset
 
 
-def get_drug_dates(cohort_config, session_topology,drug_sess_dict,date_start=None,date_end=None):
+def parse_drug_dates(cohort_config, session_topology,drug_sess_dict,date_start=None,date_end=None):
     muscimol_dates = cohort_config.get('muscimol_dates', [])
     saline_dates = cohort_config.get('saline_dates', [])
     none_dates = [d for d in session_topology['date'].unique() if d not in muscimol_dates + saline_dates]
 
+    return none_dates, muscimol_dates, saline_dates
+
+
+def get_drug_dates(dates_by_drug:list,):
+    if isinstance(dates_by_drug,list):
+        none_dates, muscimol_dates, saline_dates = dates_by_drug
+    elif isinstance(dates_by_drug, dict):
+        none_dates, muscimol_dates, saline_dates = [dates_by_drug[drug] for drug in ['none','muscimol','saline']]
     # remove any saline date 1 after muscimol dates
     muscimol_dates_dt = [datetime.strptime(str(d), '%y%m%d') for d in muscimol_dates]
     saline_dates_dt = [datetime.strptime(str(d), '%y%m%d') for d in saline_dates]
@@ -111,17 +117,20 @@ def get_drug_dates(cohort_config, session_topology,drug_sess_dict,date_start=Non
 
 
 def get_all_cond_filts():
-    return dict(
-        rare='Tone_Position==0 & Stage==3 & local_rate >= 0.8 & N_TonesPlayed==4 & Session_Block==0',
-        rare_prate='Tone_Position==0 & Stage==3 & PatternPresentation_Rate == 0.9 & N_TonesPlayed==4',
-        frequent='Tone_Position==0 & Stage==3 & local_rate <= 0.2 & N_TonesPlayed==4 &Session_Block==0',
-        frequent_prate='Tone_Position==0 & Stage==3 & PatternPresentation_Rate == 0.1 & N_TonesPlayed==4',
+    all_dict = dict(
+        rare='Tone_Position==0 & Stage==3 & local_rate >= 0.8 & N_TonesPlayed==4 & Session_Block==0 ',
+        rare_prate='Tone_Position==0 & Stage==3 & PatternPresentation_Rate >= 0.8 & N_TonesPlayed==4',
+        # frequent='Tone_Position==0 & Stage==3 & local_rate <= 0.4 & N_TonesPlayed==4 & Session_Block==0',
+        frequent='Tone_Position==0 & Stage==3 & local_rate <= 0.4 & N_TonesPlayed==4 & Session_Block==0',
+        frequent_prate='Tone_Position==0 & Stage==3 & PatternPresentation_Rate <= 0.2 & N_TonesPlayed==4',
+        rare_human='Tone_Position==0 & local_rate >= 0.6 & N_TonesPlayed==4 ',
+        frequent_human='Tone_Position==0 & local_rate <= 0.2 & N_TonesPlayed==4',
         mid1='Tone_Position==0 & Stage==3 & local_rate > 0.3 & local_rate < 0.5 & N_TonesPlayed==4',
         mid2='Tone_Position==0 & Stage==3 & local_rate < 0.7 & local_rate >= 0.5 & N_TonesPlayed==4',
         recent='Tone_Position==0 & Stage==3 & n_since_last<=2 & N_TonesPlayed==4 & Session_Block==0 & PatternPresentation_Rate != 0.5',
         distant='Tone_Position==0 & Stage==3 & n_since_last>=3 & N_TonesPlayed==4 & Session_Block==0 & PatternPresentation_Rate != 0.5',
-        pattern='Tone_Position==0 & Stage==3 & N_TonesPlayed==4',
-        none='Tone_Position==1 & Stage==3',
+        pattern='Tone_Position==0 & Stage>=3 & N_TonesPlayed==4',
+        none='Tone_Position==1 & Stage>=3',
         earlyX='Tone_Position==0 & Stage==3 & N_TonesPlayed<4',
         earlyX_1tones='Tone_Position==0 & Stage==3 & N_TonesPlayed==1',
         earlyX_2tones='Tone_Position==0 & Stage==3 & N_TonesPlayed==2 & Trial_Outcome==1',
@@ -136,8 +145,10 @@ def get_all_cond_filts():
                            'normal_exp_num_cumsum > normal_exp_num_cumsum.max()-20',
         all_devs='Tone_Position==0 & Stage==4 & Pattern_Type!=0 & N_TonesPlayed==4 & Session_Block ==3',
         deviant_C='Tone_Position==0 & Stage==4 & Pattern_Type==1 & N_TonesPlayed==4 & Session_Block ==3',
-        hit_all='Stage in [3,4] & Trial_Outcome==1',
-        miss_all='Stage in [3,4] & Trial_Outcome==0',
+        normal_exp_human='Tone_Position==0 & Stage==4 & Pattern_Type==0 & N_TonesPlayed==4 & Session_Block ==2 ',
+        deviant_C_human='Tone_Position==0 & Stage==4 & Pattern_Type>0 & N_TonesPlayed==4',
+        hit_all='Stage in [3,4,5] & Trial_Outcome==1',
+        miss_all='Stage in [3,4,5] & Trial_Outcome==0',
         hit_pattern='Tone_Position==0 & Stage in [3,4] & N_TonesPlayed==4 & Trial_Outcome==1',
         miss_pattern='Tone_Position==0 & Stage in [3,4] & N_TonesPlayed==4 & Trial_Outcome==0',
         hit_none='Tone_Position==1 & Stage in [3,4] & Trial_Outcome==1',
@@ -147,7 +158,18 @@ def get_all_cond_filts():
         dev_ABCD1 = 'Tone_Position==0 & Stage==4 & Pattern_Type==10 & N_TonesPlayed==4 & Session_Block ==3',
         dev_ABBA1 = 'Tone_Position==0 & Stage==4 & Pattern_Type==11 & N_TonesPlayed==4 & Session_Block ==3',
     )
-
+    # Add early late frequent to dict
+    rare_freq_early_late_dict = {'early': '<col> <=3', 'mid': '<col> >3 <col> <=7', 'late': '<col> >20'}
+    for tag in list(rare_freq_early_late_dict.keys()):
+        all_dict[f'frequent_prate_{tag}'] = ' & '.join([all_dict['frequent_prate'],
+                                                      rare_freq_early_late_dict[tag].replace('<col>','frequent_prate_cumsum')])
+    for ti in np.arange(0,35,5):
+        ti_str = f'<col> >= {ti} & <col> < {ti+5} & frequent_block_num == 2'
+        # ti_str = f'<col> >= {ti} & <col> < {ti+5}'
+        all_dict[f'frequent_prate_{ti}'] = ' & '.join([all_dict['frequent_prate'],ti_str.replace('<col>','frequent_prate_cumsum')])
+        ti_str = f'<col> >= {ti} & <col> < {ti+5} & frequent_block_num == 1'
+        all_dict[f'frequent_prate_{ti}_block_1'] = ' & '.join([all_dict['frequent_prate'],ti_str.replace('<col>','frequent_prate_cumsum')])
+    return all_dict
 
 def group_td_df_across_sessions(sessions_objs:dict,sessnames:list) -> pd.DataFrame:
     all_td_df = []
@@ -364,8 +386,9 @@ def in_time_window(t2eval,t,window=(-1,2)):
 def get_lick_in_patt_trials(td_df, sess:str):
     assert all([col in td_df.columns for col in ['Gap_Time_dt','ToneTime_dt']]), \
         'td_df must have Gap_Time_dt and ToneTime_dt columns'
-
-    date = sess.split('_')[1]
+    if 'Lick_Times' not in td_df.columns:
+        return
+    date = extract_date(sess)
     sess_date=str(date)
     y,m,d = int(f'20{sess_date[:2]}'),int(sess_date[2:4]),int(sess_date[4:])
     td_df['Lick_Times_dt'] = td_df['Lick_Times'].apply(lambda e: get_datetime_series(e, date))
@@ -380,7 +403,7 @@ def get_cum_sum(td_df,col_name,eval_str):
 def get_prate_block_num(td_df:pd.DataFrame, prate:float,colname=None):
     if colname is None:
         colname=prate
-    td_df['prate_diff'] = td_df['PatternPresentation_Rate'].diff()
+    td_df['prate_diff'] = td_df['PatternPresentation_Rate'].diff().round(1)
     td_df[f'{colname}_block_num'] = td_df.eval(f'prate_diff != 0 and PatternPresentation_Rate == {prate}').cumsum()
 
 
@@ -413,6 +436,8 @@ def group_licks_across_sessions(sessions_objs: dict, sessnames: list, event: str
 
 
 def filter_session(sessions:dict, sessname:str,stages:list, drug_sess_dict:dict,filt4patt=True):
+    if len(drug_sess_dict) == 0:
+        return
     if not all([any([stage in sessions[sessname].td_df['Stage'].values for stage in stages]),
                 len(sessions[sessname].td_df) > 100, get_main_sess_patterns(td_df=sessions[sessname].td_df) if filt4patt else True,
                 sessions[sessname].td_df['Trial_Outcome'].mean()>0.25]):
@@ -433,3 +458,94 @@ def get_cumsum_columns(sessions, sessname):
     get_cum_sum(sessions[sessname].td_df, 'normal_num', 'Tone_Position==0 & Session_Block==3 & Pattern_Type==0')
     get_cum_sum(sessions[sessname].td_df, 'normal_exp_num', 'Tone_Position==0 & Session_Block==2 & Pattern_Type==0')
     get_cum_sum(sessions[sessname].td_df, 'deviant_C_num', 'Tone_Position==0 & Session_Block==3 & Pattern_Type==1')
+
+    # get prate cumsums
+    sess_td_df = sessions[sessname].td_df.copy()
+    max_rare_block = sessions[sessname].td_df['rare_block_num'].max()
+    max_freq_block = sessions[sessname].td_df['frequent_block_num'].max()
+
+    for prate,prate_name,cond_max_block in zip([0.9,0.1],['rare','frequent'],[max_rare_block,max_freq_block]):
+        cumsum_list = []
+        for block_num in range(1,cond_max_block+1):
+            block_td_df = sess_td_df.query(f'PatternPresentation_Rate == {prate} & {prate_name}_block_num == {block_num}').copy()
+            get_cum_sum(block_td_df, f'', f'Tone_Position==0')
+            cumsum_list.append(block_td_df['_cumsum'])
+        sessions[sessname].td_df[f'{prate_name}_prate_cumsum'] = 0
+        if len(cumsum_list) > 0:
+            cumsum_series = pd.concat(cumsum_list, axis=0)
+            sessions[sessname].td_df.loc[cumsum_series.index, f'{prate_name}_prate_cumsum'] = cumsum_series
+
+
+def get_main_sess_patterns(name='', date='', main_sess_td_name='', home_dir=Path(''),td_df=None) -> [int,int,int,int]:
+    if isinstance(td_df, pd.DataFrame):
+        main_sess_td = td_df
+    else:
+        main_sess_td = get_main_sess_td_df(name, date, main_sess_td_name, home_dir)[0]
+
+    # try:main_pattern = main_sess_td.query('Session_Block>=0 & Tone_Position==0')['PatternID'].mode().iloc[0]
+    # except IndexError: main_pattern = None
+    main_patterns = main_sess_td.query('Session_Block>=0 & Tone_Position==0 & Pattern_Type!=-1')['PatternID'].unique()
+    main_patterns = [[int(e) for e in main_pattern.split(';')] for main_pattern in main_patterns]
+
+    if len(main_patterns) == 0:
+        main_patterns = [[0,0,0,0]]
+
+    return sorted(main_patterns, key=lambda x: x[0])
+
+
+def get_main_sess_td_df(_name=None, _date=None, _main_sess_td_name=None, _home_dir=None):
+    abs_td_path = None
+    if _main_sess_td_name is not None and isinstance(_main_sess_td_name, Path):
+        split_path = _main_sess_td_name.parts
+        # split_path = split_path_cross_platform(str(_main_sess_td_name))
+        abs_td_path = Path(_home_dir)/ Path(*split_path[split_path.index('data'):])
+        if not abs_td_path.exists():
+            abs_td_path = None
+    if abs_td_path is None and _main_sess_td_name is not None:
+        if str(_main_sess_td_name).endswith('.csv'):
+            abs_td_path = Path(_main_sess_td_name)
+            try:
+                abs_td_path = Path(_home_dir)/ Path(*abs_td_path.parts[abs_td_path.parts.index('data'):])
+            except ValueError:
+                pass
+        if abs_td_path is None or not abs_td_path.exists():
+            if _name is None or _date is None :
+                _name, _, _date = Path(_main_sess_td_name).stem.split('_')[:3]
+                _date = _date[:-1]
+                # _main_sess_td_name = f'{_name}_{_date}_TrialData.csv'
+            td_path_pattern = 'data/Dammy/<name>/TrialData'
+            abs_td_path_dir = _home_dir / td_path_pattern.replace('<name>', _name)
+            assert abs_td_path_dir.exists()
+            # print(f'{_name}_TrialData_{_date}*.csv')
+            try:
+                abs_td_path = next(abs_td_path_dir.glob(f'{_name}_TrialData_{_date}*.csv'))
+            except StopIteration:
+                return pd.DataFrame(), None
+
+    # print(f'{abs_td_path = }')
+    main_sess_td = pd.read_csv(abs_td_path)
+    return main_sess_td, abs_td_path
+
+
+def parse_perturbation_log(drug_log_xlsx_path, ):
+    drug_log_xlsx_dfs = pd.read_excel(drug_log_xlsx_path, sheet_name=None)
+    # parse muscimol drug log
+    muscimol_drug_log_df = drug_log_xlsx_dfs['Drug Infusion Log']
+    muscimol_drug_log_df = muscimol_drug_log_df[['Date (yymmdd)','Animals (mouseID)','Drug (muscimol, saline, none)']]
+    muscimol_drug_log_df.columns = ['date','name','drug']
+
+    # parse opto log
+    opto_log_df = drug_log_xlsx_dfs['Opto log']
+    opto_log_df = opto_log_df[['Date (yymmdd)','Animals (mouseID)','Protocol','Opto state']]
+    opto_log_df.columns = ['date','name','protocol','opto_state']
+
+    return {'infusion_log':muscimol_drug_log_df, 'opto_log':opto_log_df}
+
+def get_perturbation_sessions(perturbation_df:pd.DataFrame,perturb_colname):
+    unique_perturbations = perturbation_df[perturb_colname].unique()
+    pertubation_sessions = {}
+    for pertubation in unique_perturbations:
+        pertub_sessions = [f'{r["name"]}_{r["date"]}' for _,r in perturbation_df[perturbation_df[perturb_colname]==pertubation].iterrows()]
+        pertubation_name = pertubation.lower().replace(' ','_').replace('-','_')
+        pertubation_sessions[pertubation_name] = pertub_sessions
+    return pertubation_sessions

@@ -1,22 +1,16 @@
-import argparse
-import platform
-from pathlib import Path
-
 import matplotlib
-import numpy as np
-import pandas as pd
-import yaml
 from matplotlib import pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
-from scipy.stats import ttest_ind, ttest_1samp, sem
-from sklearn.feature_selection import mutual_info_classif
+from scipy.stats import ttest_1samp, sem
 from sklearn.metrics.pairwise import cosine_similarity
 
 from aggregate_ephys_funcs import *
 from behviour_analysis_funcs import get_all_cond_filts
-from ephys_analysis_funcs import posix_from_win, plot_2d_array_with_subplots, plot_psth, format_axis, plot_sorted_psth
+from io_utils import posix_from_win
+from plot_funcs import plot_2d_array_with_subplots, plot_psth, plot_sorted_psth, format_axis, unique_legend
 from neural_similarity_funcs import plot_similarity_mat, compare_pip_sims_2way
-from regression_funcs import run_glm
+from population_analysis_funcs import PopPCA
+from unit_analysis import get_participation_rate
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()
@@ -60,14 +54,15 @@ if '__main__' == __name__:
     plt.style.use('figure_stylesheet.mplstyle')
     window = (-0.1, 0.25)
 
-    event_responses = aggregate_event_reponses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
-                                               events2exclude=['trial_start',], window=window,
-                                               pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
-                                                                      'baseline': 0, 'mean': None, 'mean_axis': 0})
+    # event_responses = aggregate_event_responses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
+    #                                             events2exclude=['trial_start',], window=window,
+    #                                             pred_from_psth_kwargs={'use_unit_zscore': True, 'use_iti_zscore': False,
+    #                                                                   'baseline': 0, 'mean': None, 'mean_axis': 0})
+    event_responses = joblib.load(r"D:\ephys\normdev_resps_ephys_2401_2504.joblib")
     concatenated_event_responses = {
         e: np.concatenate([event_responses[sessname][e].mean(axis=0) for sessname in event_responses
                            if any([animal in sessname for animal in hipp_animals])])
-        for e in list(event_responses.values())[0].keys()}
+        for e in list(event_responses.lower())[0].keys()}
 
     sessnames = list(event_responses.keys())
     event_features = aggregate_event_features(sessions, events=[f'{pip}-{pip_i}' for pip in 'ABCD' for pip_i in [0,1]],
@@ -76,20 +71,20 @@ if '__main__' == __name__:
     # do some decoding
     event_responses_by_features_by_sess = {
         e: [event_responses[sessname][e] for sessname in event_responses]
-        for e in list(event_responses.values())[0].keys()}
+        for e in list(event_responses.lower())[0].keys()}
 
-    full_pattern_responses = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-1, 2],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                         if 'A' in e],
+                                                       events2exclude=['trial_start'], window=[-1, 2],
+                                                       pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
 
     concatenated_full_pattern_responses = {
-        e: np.concatenate([full_pattern_responses[sessname][e][100::10][:10].mean(axis=0) for sessname in full_pattern_responses])
+        e: np.concatenate([full_pattern_responses[sessname][e][100:].mean(axis=0) for sessname in full_pattern_responses])
         if e == 'A-0' else np.concatenate([full_pattern_responses[sessname][e].mean(axis=0) for sessname in full_pattern_responses])
-        for e in [e for e in concatenated_event_responses.keys() if 'A' in e]}
+        for e in [e for e in event_responses.keys() if 'A' in e]}
 
     events_by_property = {
         'ptype_i': {pip: 0 if int(pip.split('-')[1]) < 1 else 1 for pip in [f'{p}-{i}' for i in range(2) for p in 'ABCD']},
@@ -132,12 +127,12 @@ if '__main__' == __name__:
                                  lss=['-', '--', '-', '--'], plt_cols=['C' + str(i) for i in [0, 0, 1, 1]]
                                  )
     # plot 3d projections
-    x_ser = np.round(np.linspace(-1,2, concatenated_full_pattern_responses['A-0'].shape[-1]), 2)
+    x_ser = np.round(np.linspace(-0.5,1.5, concatenated_full_pattern_responses['A-0'].shape[-1]), 2)
     full_pattern_pca.plot_3d_pca_ts('by_type', [-1, 2], x_ser=x_ser, smoothing=10, pca_comps_2plot=[3,1,0], t_end=1,
                                     plot_out_event=False,
                                     scatter_times=[0.65],scatter_kwargs={'marker':'*','s':50,'c':'k'})
     # save 3d plot
-    full_pattern_pca.proj_3d_plot.savefig(f'full_pattern_norm_dev_pca_3d_plot_aggregate_sessions.pdf')
+    full_pattern_pca.proj_3d_plot[0].savefig(f'full_pattern_norm_dev_pca_3d_plot_aggregate_sessions.pdf')
     full_pattern_pca.plot_2d_pca_ts('by_type', [-1, 2], x_ser=x_ser, smoothing=10, pca_comps_2plot=[3,1], t_end=1,
                                     plot_out_event=False,
                                     scatter_times=[0.5],scatter_kwargs={'marker':'*','s':50,'c':'k'})
@@ -189,7 +184,7 @@ if '__main__' == __name__:
             # if np.unique(ys).shape[0] < len(patt_is):
             #     continue
             try:
-                decoders_dict[f'{sessname}-{p}s'] = decode_responses(xs, ys,n_runs=100)
+                decoders_dict[f'{sessname}-{p}s'] = decode_responses(xs, ys,dec_kwargs={'n_runs':100})
             except ValueError:
                 print(f'{sessname}-{p}s failed')
                 bad_dec_sess.add(sessname)
@@ -222,34 +217,49 @@ if '__main__' == __name__:
         cm_plot_by_pip[0].savefig(abstraction_figdir / f'decoding_normdev_across_pips_{pip}.pdf')
 
     # rolling window of norm dev decoding
-    dec_over_time_window = [-1,1.5]
-    full_pattern_responses_4_ts_dec = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=dec_over_time_window,
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    dec_over_time_window = [-0.5,1.5]
+    full_pattern_responses_4_ts_dec = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                                  if 'A' in e],
+                                                                events2exclude=['trial_start'], window=dec_over_time_window,
+                                                                pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
+
+    dec_over_time_window = [-0.5,1.5]
+
+    event_responses = joblib.load(r"D:\ephys\normdev_resps_ephys_2401_2504.joblib")
+    resps2use = full_pattern_responses_4_ts_dec = event_responses
+
     window_size = 25
-    resp_width = full_pattern_responses_4_ts_dec[sessname]['A-0'].shape[-1]
+    resp_width = list(event_responses.values())[0]['A-0'].shape[-1]
     resp_x_ser = np.linspace(*dec_over_time_window,resp_width)
     # decode events
     # train on A decode on B C D
-    norm_dev_figdir = dev_ABBA1_figdir.parent / 'normdev_aggregate_figs'
+    norm_dev_figdir =Path(r'X:\Dammy\figures\decoding_plots_aggr_sessions_ephys_2401_2504')
     if not norm_dev_figdir.is_dir():
         norm_dev_figdir.mkdir()
+
+    # concatenated_full_pattern_responses = {
+    #     e: np.concatenate(
+    #         [full_pattern_responses[sessname][e][100::10][:10].mean(axis=0) for sessname in full_pattern_responses])
+    #     if e == 'A-0' else np.concatenate(
+    #         [full_pattern_responses[sessname][e].mean(axis=0) for sessname in full_pattern_responses])
+    #     for e in [e for e in concatenated_event_responses.keys() if 'A' in e]}
+    pips_as_ints = {pip: pip_i for pip_i, pip in enumerate([f'{pip}-{pip_i}' for pip in 'ABCD' for pip_i in range(2)])}
+
     normdev_ts_dec_dict = {}
     patt_is = [0, 1]
     bad_dec_sess = set()
     for sessname in tqdm(list(full_pattern_responses_4_ts_dec.keys()), total=len(full_pattern_responses_4_ts_dec),
                          desc='decoding across sessions'):
         # if not any(e in sessname for e in ['DO79', 'DO81']):
-        if not any(e in sessname for e in ['DO82']):
-            continue
+        # if not any(e in sessname for e in ['DO82']):
+        #     continue
 
         for t in tqdm(range(resp_width - window_size), total=resp_width - window_size, desc='decoding across time'):
             xys = [(
-                   full_pattern_responses_4_ts_dec[sessname][f'A-{pip_i}'][150:200][::3] if pip_i == 0 else full_pattern_responses_4_ts_dec[sessname][
+                   full_pattern_responses_4_ts_dec[sessname][f'A-{pip_i}'][150:200] if pip_i == 0 else full_pattern_responses_4_ts_dec[sessname][
                        f'A-{pip_i}'],
                    np.full_like(full_pattern_responses_4_ts_dec[sessname][f'A-{pip_i}'][:, 0, 0], pips_as_ints[f'A-{pip_i}']))
                    for pip_i in patt_is]
@@ -260,7 +270,9 @@ if '__main__' == __name__:
             # if np.unique(ys).shape[0] < len(patt_is):
             #     continue
             try:
-                normdev_ts_dec_dict[f'{sessname}-{t}:{t+window_size}s'] = decode_responses(xs, ys, n_runs=100)
+                normdev_ts_dec_dict[f'{sessname}-{t}:{t+window_size}s'] = decode_responses(xs, ys,
+                                                                                           dec_kwargs={'cv_folds':5,
+                                                                                                       'n_runs':100})
             except ValueError:
                 print(f'{sessname} failed')
                 bad_dec_sess.add(sessname)
@@ -268,6 +280,7 @@ if '__main__' == __name__:
     # [decoders_dict[dec_name]['data'].plot_confusion_matrix([f'{pip}-{pip_i}' for pip in 'D' for pip_i in patt_is])
     #  for dec_name in decoders_dict.keys()]
     sess2use = [dec_name.split('-')[0] for dec_name in normdev_ts_dec_dict.keys()]
+    resps2use = event_responses
     norm_dev_accs_ts_dict = {sessname:{t: np.mean(normdev_ts_dec_dict[f'{sessname}-{t}:{t+window_size}s']['data'].accuracy)
                                        for t in range(resp_width - window_size)}
                              for sessname in tqdm(list(resps2use.keys()),)
@@ -279,23 +292,29 @@ if '__main__' == __name__:
     # _ = decode_over_sliding_t(full_pattern_responses_4_ts_dec,0.25,dec_over_time_window,pips_as_ints,['A-0','A-1'],
     #                           animals_to_use=['DO82'])
 
+    from aggregate_psth_analysis import padded_rolling_mean
     norm_dev_accs_ts_plot = plt.subplots()
-    norm_dev_accs_ts_plot[1].plot(norm_dev_accs_ts_df.mean(axis=0),color='k')
+    norm_dev_accs_ts_plot[1].plot(norm_dev_accs_ts_df.columns.tolist(),padded_rolling_mean(np.array(norm_dev_accs_ts_df),1).mean(axis=0),
+                                  color='k')
+    lower = (norm_dev_accs_ts_df - norm_dev_accs_ts_df.sem(axis=0)).values
+    upper = (norm_dev_accs_ts_df + norm_dev_accs_ts_df.sem(axis=0)).values
     norm_dev_accs_ts_plot[1].fill_between(norm_dev_accs_ts_df.columns.tolist(),
-                                          norm_dev_accs_ts_df.mean(axis=0)-norm_dev_accs_ts_df.sem(axis=0),
-                                          norm_dev_accs_ts_df.mean(axis=0)+norm_dev_accs_ts_df.sem(axis=0),
-                                          color='k',alpha=0.25
+                                          padded_rolling_mean(lower,1).mean(axis=0),
+                                          padded_rolling_mean(upper,1).mean(axis=0),
+                                          color='k', alpha=0.1
                                           )
     norm_dev_accs_ts_plot[1].set_xlabel('time (s)')
+    
     norm_dev_accs_ts_plot[1].set_ylabel('decoding accuracy')
     norm_dev_accs_ts_plot[1].set_title('')
     format_axis(norm_dev_accs_ts_plot[1],hlines=[0.5],vspan=[[t,t+0.15] for t in np.arange(0,1,0.25)])
     norm_dev_accs_ts_plot[1].axvspan(0.5,0.5+0.15,fc='red',alpha=0.1)
 
     norm_dev_accs_ts_plot[0].set_layout_engine('tight')
-    norm_dev_accs_ts_plot[0].set_size_inches((3,2))
+    norm_dev_accs_ts_plot[0].set_size_inches((2,1.5))
     norm_dev_accs_ts_plot[0].show()
-    norm_dev_accs_ts_plot[0].savefig( norm_dev_figdir/ 'norm_dev_accs_ts_82_only.pdf')
+    norm_dev_accs_ts_plot[0].savefig( norm_dev_figdir/ 'norm_dev_accs_ts_2401_2504.pdf')
+    norm_dev_accs_ts_df.to_hdf(norm_dev_accs_ts_df/f'norm_dev_accs_ts_2401_2504_df.h5', key='norm_dev_accs_ts_df')
 
     dec_acc_plot = plt.subplots()
     accuracy_across_sessions_all_df = pd.concat([pd.DataFrame.from_dict({f'{dec_name}_{sffx}': dec[sffx].accuracy
@@ -337,7 +356,7 @@ if '__main__' == __name__:
         # plot accuracy
 
         decoder_acc_plot = plt.subplots()
-        decoder_acc_plot[1].boxplot([np.array(dec.accuracy) for dec in decoder.values()],
+        decoder_acc_plot[1].boxplot([np.array(dec.accuracy) for dec in decoder.lower()],
                                     labels=decoder.keys(),showmeans=True, meanprops=dict(mfc='k'),)
         decoder_acc_plot[1].set_title(f'Accuracy of {lbl}')
         decoder_acc_plot[0].set_layout_engine('tight')
@@ -345,7 +364,7 @@ if '__main__' == __name__:
         # decoder_acc_plot[0].savefig(abstraction_figdir / f'{lbl}_decoding_accuracy_dev_ABBA1.pdf')
 
         # ttest on fold accuracy
-        ttest = ttest_ind(*[np.array(dec.fold_accuracy).flatten() for dec in decoder.values()],
+        ttest = ttest_ind(*[np.array(dec.fold_accuracy).flatten() for dec in decoder.lower()],
                           alternative='greater', equal_var=True)
         print(f'{lbl} ttest: {ttest}')
 
@@ -505,10 +524,10 @@ if '__main__' == __name__:
     psth_figdir = abstraction_figdir.parent/'psth_plots_aggr_sessions'
     if not psth_figdir.is_dir():
         psth_figdir.mkdir()
-    full_pattern_responses_4_psth = aggregate_event_reponses(sessions, events=[e for e in concatenated_event_responses.keys()
-                                                                        if 'A' in e],
-                                                      events2exclude=['trial_start'], window=[-0.25, 1],
-                                                      pred_from_psth_kwargs={'use_unit_zscore': True,
+    full_pattern_responses_4_psth = aggregate_event_responses(sessions, events=[e for e in concatenated_event_responses.keys()
+                                                                                if 'A' in e],
+                                                              events2exclude=['trial_start'], window=[-0.25, 1],
+                                                              pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                              'use_iti_zscore': False,
                                                                              'baseline': 0, 'mean': None,
                                                                              'mean_axis': 0})
@@ -518,7 +537,7 @@ if '__main__' == __name__:
                            for sessname in full_pattern_responses_4_psth])
         for e in [e for e in concatenated_event_responses.keys() if 'A' in e]}
 
-    psth_figdir = abstraction_figdir.parent/'psth_plots_aggr_sessions'
+    psth_figdir = abstraction_figdir.parent/'psth_plots_aggr_sessions_cv_sort'
     for pip in [e for e in concatenated_event_responses.keys() if 'A' in e]:
         resp_mat = concat_full_patt_resps[pip]
         resp_mat_sorted = resp_mat[concat_full_patt_resps['A-0'][:,25:50].max(axis=1).argsort()[::-1]]
@@ -533,7 +552,9 @@ if '__main__' == __name__:
 
         # format axis
 
-    psth_figdir = abstraction_figdir.parent / 'psth_plots_aggr_sessions'
+    psth_figdir = abstraction_figdir.parent / 'psth_plots_aggr_sessions_odd_odd'
+    if not psth_figdir.is_dir():
+        psth_figdir.mkdir()
     for sorting in ['own','cross']:
         for pip in [e for e in concatenated_event_responses.keys() if 'A' in e]:
             for animal in hipp_animals:
@@ -592,7 +613,7 @@ if '__main__' == __name__:
         for e in pips_by_cond}
     x_ser = np.round(np.linspace(*full_patt_window, concat_normdev_hipp_only[f'A-0'].shape[-1]), 2)
 
-    active_units_by_pip_normdev = {pip: np.hstack([get_active_units(full_pattern_responses_4_ts_dec[sess][pip],
+    active_units_by_pip_normdev = {pip: np.hstack([get_participation_rate(full_pattern_responses_4_ts_dec[sess][pip],
                                                                     full_patt_window,
                                                                     [0.1, 1], 2, max_func=np.max)
                                                    for sess in rare_freq_sess if
@@ -710,9 +731,9 @@ if '__main__' == __name__:
 
     # plot boxplot of cond diff
     cond_diff_by_unit_plot = plt.subplots()
-    bins2use = np.histogram(cond_diff_by_unit.values, bins='fd', density=False)
+    bins2use = np.histogram(cond_diff_by_unit.lower, bins='fd', density=False)
     [cond_diff_by_unit_plot[1].hist(data, bins=bins2use[1], density=False, alpha=0.9, fc=c, ec='k', lw=0.05)
-     for data, c in zip([cond_diff_by_unit.values, shuffle_diff_by_unit][:1], ['#B28B84', 'grey'])]
+     for data, c in zip([cond_diff_by_unit.lower, shuffle_diff_by_unit][:1], ['#B28B84', 'grey'])]
     # cond_diff_by_unit_plot[1].boxplot([cond_diff_by_unit,shuffle_diff_by_unit],showmeans=False,
     #                                   bootstrap=1000,whis=[1,99],
     #                                   )
@@ -728,46 +749,76 @@ if '__main__' == __name__:
     print(
         f'independent ttest from shuffle: {ttest_ind(cond_diff_by_unit, shuffle_diff_by_unit, equal_var=False, alternative="greater")}, '
         f'\n shuffle mean = {np.mean(shuffle_diff_by_unit)}')
-    print(f'{(cond_diff_by_unit.values > np.percentile(shuffle_diff_by_unit, 100)).sum() / len(cond_diff_by_unit)} '
+    print(f'{(cond_diff_by_unit.lower > np.percentile(shuffle_diff_by_unit, 100)).sum() / len(cond_diff_by_unit)} '
           f'units exceed 100th percentile')
-    print(f'{(cond_diff_by_unit.values < np.percentile(shuffle_diff_by_unit, 0)).sum() / len(cond_diff_by_unit)} '
+    print(f'{(cond_diff_by_unit.lower < np.percentile(shuffle_diff_by_unit, 0)).sum() / len(cond_diff_by_unit)} '
           f'units less than 0th percentile')
 
 
     # rare_freq_dec_ts_plot[0].savefig(aggr_figdir / f'rare_freq_dec_ts{"_".join(conds)}.pdf')
 
-    # sim using full population
-    concatenated_event_responses_hipp_only = {
-        e: np.concatenate([event_responses[sessname][e].mean(axis=0) for sessname in event_responses
-                           if any([animal in sessname for animal in ['DO79', 'DO81']])],)
-        for e in list(event_responses.values())[0].keys()}
-    pips_2_comp = ['D-1', 'D-0', 'D-2', ]
-    dev_comps = {}
-    for pip in 'ABCD':
-        pips_2_comp = [f'{pip}-1', f'{pip}-0', f'{pip}-2', ]
-        resp_vectors = [concatenated_event_responses_hipp_only[e][:,-10:].mean(axis=1) for e in pips_2_comp]
+    abcd_abba1_com_by_name = {}
+    for animal in ['DO81', 'DO79', 'DO95', 'DO97', ]:    # sim using full population
+        concatenated_event_responses_hipp_only = {
+            e: np.concatenate([event_responses[sessname][e].mean(axis=0) for sessname in event_responses
+                               # if any([animal in sessname for animal in ['DO81']])],)
+                               if animal in sessname])
+            for e in list(event_responses.values())[0].keys()}
+        pips_2_comp = ['D-1', 'D-0', 'D-2', ]
+        dev_comps = {}
+        for pip in 'ABCD':
+            pips_2_comp = [f'{pip}-1', f'{pip}-0', f'{pip}-2', ]
+            resp_vectors = [concatenated_event_responses_hipp_only[e][:,-10:].mean(axis=1) for e in pips_2_comp]
+            sim_dev_to_norms = cosine_similarity(resp_vectors)
+            # sim_mat_plot = plot_similarity_mat(sim_dev_to_norms,pips_2_comp,'Greys',im_kwargs=dict(vmax=1,vmin=0.6,)),
+            # sim_mat_plot[0][0].show()
+            # sim_mat_plot[0][0].savefig(dev_ABBA1_figdir / f"sim_mat_new_{'_'.join(pips_2_comp)}_grays.pdf")
+            dev_comps[pip] = sim_dev_to_norms[0, 1:]
+        abcd_abba1_com_by_name[animal] = dev_comps
+        resp_vectors = [concatenated_event_responses_hipp_only[e][:,-10:].mean(axis=1) for e in ['D-1','D-0','C-0']]
         sim_dev_to_norms = cosine_similarity(resp_vectors)
-        sim_mat_plot = plot_similarity_mat(sim_dev_to_norms,pips_2_comp,'Greys',im_kwargs=dict(vmax=1,vmin=0.6,)),
-        sim_mat_plot[0][0].show()
-        sim_mat_plot[0][0].savefig(dev_ABBA1_figdir / f"sim_mat{'_'.join(pips_2_comp)}_grays.pdf")
-        dev_comps[pip] = sim_dev_to_norms[0, 1:]
-    resp_vectors = [concatenated_event_responses_hipp_only[e][:,-10:].mean(axis=1) for e in ['D-1','D-0','C-0']]
-    sim_dev_to_norms = cosine_similarity(resp_vectors)
 
-    dev_comp_plot = plt.subplots()
-    for pip_i, (pip,pip_sims) in enumerate(dev_comps.items()):
-        [dev_comp_plot[1].scatter(pip_i+offset, sim, label=lbl,c=c,s=50)
-         for offset,sim,lbl,c in zip([-0.1,0.1],pip_sims,['ABCD(0)','ABBA(1)',],['blue','red'])]
-    # format_axis(dev_comp_plot[1],vlines=list(range(len(dev_comps))),ls='--',lw=0.2)
-    dev_comp_plot[1].set_ylabel('Cosine similarity')
-    # dev_comp_plot[1].set_xlabel('unit')
-    # dev_comp_plot[1].legend()
-    dev_comp_plot[1].set_yticks([0.6,0.7])
-    dev_comp_plot[1].set_yticklabels([0.6,0.7])
-    dev_comp_plot[1].set_xticks(list(range(len(dev_comps))))
-    dev_comp_plot[1].set_xticklabels(list(dev_comps.keys()))
-    dev_comp_plot[0].set_layout_engine('constrained')
-    dev_comp_plot[0].set_size_inches(2, 2)
-    dev_comp_plot[0].show()
-    dev_comp_plot[0].savefig(norm_dev_figdir / f"dev_comp_scatter.pdf")
+        dev_comp_plot = plt.subplots()
+        for pip_i, (pip,pip_sims) in enumerate(dev_comps.items()):
+            [dev_comp_plot[1].scatter(pip_i+offset, sim, label=lbl,c=c,s=50)
+             for offset,sim,lbl,c in zip([-0.1,0.1],pip_sims,['ABCD(0)','ABBA(1)',],['blue','red'])]
+        # format_axis(dev_comp_plot[1],vlines=list(range(len(dev_comps))),ls='--',lw=0.2)
+        dev_comp_plot[1].set_ylabel('Cosine similarity')
+        # dev_comp_plot[1].set_xlabel('unit')
+        # dev_comp_plot[1].legend()
+        # dev_comp_plot[1].set_yticks([0.6,0.7])
+        # dev_comp_plot[1].set_yticklabels([0.6,0.7])
+        dev_comp_plot[1].set_xticks(list(range(len(dev_comps))))
+        dev_comp_plot[1].set_xticklabels(list(dev_comps.keys()))
+        dev_comp_plot[0].set_layout_engine('constrained')
+        dev_comp_plot[0].set_size_inches(2, 2)
+        # dev_comp_plot[0].show()
+        dev_comp_plot[0].savefig(norm_dev_figdir / f"dev_comp_scatter_new_{animal}.pdf")
+
+    # all animal dev comp plot
+    dev_comp_all_animals_plot = plt.subplots()
+    dev_comp_df = pd.DataFrame.from_dict(abcd_abba1_com_by_name).T
+    [[dev_comp_all_animals_plot[1].errorbar(pip_i+pos,np.mean([sims[sim_i] for sims in dev_comp_df[pip]]),
+                                           yerr=sem([sims[sim_i] for sims in dev_comp_df[pip]]),
+                                           c=c,label=lbl,capsize=20,fmt='o')
+     for pip_i,pip in enumerate(dev_comp_df)]
+     for sim_i, (lbl,c,pos) in enumerate(zip(['ABCD(0)','ABBA(1)',][:],['#00008bff','#ff8610ff'],
+                                             [-.05,0.05]))]
+
+    [dev_comp_all_animals_plot[1].plot(np.arange(dev_comp_df.shape[1])+pos,
+        dev_comp_df.explode(dev_comp_df.columns.tolist()).iloc[sim_i::2].mean(axis=0), c=c)
+        for sim_i, (lbl,c,pos) in enumerate(zip(['ABCD(0)','ABBA(1)',][:],['#00008bff','#ff8610ff'],
+                                             [-.05,0.05]))]
+    dev_comp_all_animals_plot[1].set_xticks(list(range(dev_comp_df.shape[1])))
+    dev_comp_all_animals_plot[1].set_xticklabels([f'pip {i}' for i in range(dev_comp_df.shape[1])])
+    unique_legend(dev_comp_all_animals_plot)
+    dev_comp_all_animals_plot[0].show()
+    dev_comp_all_animals_plot[0].set_size_inches(2.5,2.5)
+    dev_comp_all_animals_plot[0].set_layout_engine('tight')
+    dev_comp_all_animals_plot[0].savefig(norm_dev_figdir/'all_mice_similarity_comp.pdf')
+
+    # ttest
+    dev_comp_df_by_rule = [dev_comp_df.explode(dev_comp_df.columns.tolist()).iloc[sim_i::2].astype(float)
+                           for sim_i,_ in enumerate(['ABCD(0)','ABBA(1)'])]
+    ttest_ind(dev_comp_df_by_rule[0],dev_comp_df_by_rule[1],equal_var=True,alternative="greater")
 

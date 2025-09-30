@@ -1,37 +1,346 @@
-import matplotlib.pyplot as plt
-import matplotlib
 # matplotlib.use('TkAgg')
-import neo
 import numpy as np
-import pandas as pd
-from matplotlib import animation
-from sklearn.feature_selection import mutual_info_regression
-from sklearn.neighbors import KernelDensity
+from matplotlib import pyplot as plt, lines as mlines
+from scipy.linalg import orthogonal_procrustes
+from sklearn.cross_decomposition import CCA
 
 from ephys_analysis_funcs import *
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import euclidean
-from scipy.stats import norm
-from scipy.stats import bootstrap, entropy
 import argparse
 import yaml
 import platform
 from elephant.gpfa import GPFA
-from elephant.conversion import BinnedSpikeTrain
 import neo
 from sklearn.model_selection import cross_val_score
 from os import cpu_count
 from itertools import combinations
 
 from behviour_analysis_funcs import get_sess_name_date_idx
-from sythesise_spikes import integrated_oscillator, random_projection,generate_spiketrains
-import quantities as pq
-from IPython.display import HTML
-from IPython import display
-from neural_similarity_funcs import compare_pip_sims_2way,plot_similarity_mat
-# from npeet import entropy_estimators as ee
+from io_utils import posix_from_win
+from plot_funcs import plot_ts_var, format_axis
+from neural_similarity_funcs import compare_pip_sims_2way
+from sess_dataclasses import Session, get_predictor_from_psth
+
+
+class PopPCA:
+
+    def __init__(self, responses_by_cond: dict):
+        self.scatter_plot = None
+        self.proj_2d_plot = None
+        self.proj_3d_plot = None
+        self.eig_vals = None
+        self.projected_pca_ts_by_cond = None
+        self.pca_ts_plot = None
+        self.Xa_trial_averaged_pca = None
+        assert isinstance(list(responses_by_cond.values())[0], dict)
+        self.responses_by_cond = responses_by_cond
+        self.conds = list(responses_by_cond.keys())
+        self.events = list(responses_by_cond[self.conds[0]].keys())
+        self.event_concatenated_responses = self.get_event_concatenated_responses()
+        self.get_eig_vals()
+
+    def get_event_concatenated_responses(self):
+        event_concatenated_responses = np.hstack(
+            [np.hstack(
+                [e_responses for e_name, e_responses in cond_responses.items()])
+                for cond_responses in self.responses_by_cond.values()])
+        event_concatenated_responses = np.squeeze(event_concatenated_responses)
+        event_concatenated_responses = event_concatenated_responses - np.nanmean(event_concatenated_responses, axis=1,
+                                                                                 keepdims=True)
+        return event_concatenated_responses
+
+    def get_eig_vals(self):
+        self.eig_vals = compute_eig_vals(self.event_concatenated_responses, plot_flag=True)
+        self.eig_vals[2][1].set_xlim(0, 30)
+        self.eig_vals[2][1].set_ylabel('PC component')
+        self.eig_vals[2][1].set_xlabel('Proportion of variance explained')
+        # self.eig_vals[2][0].show()
+
+    def get_trial_averaged_pca(self, n_components=15, standardise=True):
+        self.Xa_trial_averaged_pca = compute_trial_averaged_pca(self.event_concatenated_responses,
+                                                                n_components=n_components, standardise=standardise)
+
+    def get_projected_pca_ts(self, standardise=True):
+        self.projected_pca_ts_by_cond = {cond: {event_name: project_pca(event_response, self.Xa_trial_averaged_pca,
+                                                                        standardise=standardise)
+                                                for event_name, event_response in cond_responses.items()}
+                                         for cond, cond_responses in self.responses_by_cond.items()}
+
+    def plot_pca_ts(self, event_window, n_comp_toplot=5, plot_separately=False, fig_kwargs=None,
+                    conds2plot=None, **kwargs):
+        if conds2plot is None:
+            conds2plot = self.conds
+        if kwargs.get('events2plot', None) is None:
+            events2plot = {cond: list(self.projected_pca_ts_by_cond[cond].keys()) for cond in conds2plot}
+        else:
+            events2plot = kwargs.get('events2plot')
+        if kwargs.get('plot', None) is None:
+            self.pca_ts_plot = plt.subplots(len(self.events) if plot_separately else 1, n_comp_toplot, squeeze=False,
+                                            **(fig_kwargs if fig_kwargs is not None else {}))
+        else:
+            self.pca_ts_plot = kwargs.get('plot')
+
+        axes = self.pca_ts_plot[1] if plot_separately else [self.pca_ts_plot[1][0]] * len(self.events)
+        lss = kwargs.get('lss', ['-', '--', ':', '-.'])
+        plt_cols = kwargs.get('plt_cols', ['C0', 'C1', 'C2', 'C3', 'C4', 'C5'])
+        [[plot_pca_ts([projected_responses], [f'{cond} {event}'], event_window, n_components=n_comp_toplot,
+                      plot=[self.pca_ts_plot[0], axes[ei]], plot_kwargs={'ls': lss[cond_i],  # 'c': plt_cols[ei],
+                                                                         'label': f'{cond} {event}'})
+          for ei, (event, projected_responses) in
+          enumerate(zip(events2plot[cond], [self.projected_pca_ts_by_cond[cond][e] for e in events2plot[cond]]))]
+         for cond_i, cond in enumerate(conds2plot)]
+        [row_axes[0].set_ylabel('PC component') for row_axes in self.pca_ts_plot[1]]
+        [row_axes[0].legend(loc='upper center', ncol=4) for row_axes in self.pca_ts_plot[1].T]
+        # [ax.legend() for ax in self.pca_ts_plot[1]]
+        [ax.set_xlabel('Time from stimulus onset (s)') for ax in self.pca_ts_plot[1][-1]]
+        self.pca_ts_plot[0].show()
+
+    def scatter_pca_points(self, prop: str, t_s: list, x_ser: np.ndarray, **kwargs):
+        pca_comps_2plot = kwargs.get('pca_comps_2plot', [0, 1])
+        if kwargs.get('plot', None) is None:
+            fig, ax = plt.subplots(**kwargs.get('fig_kwargs', {}))
+        else:
+            fig, ax = kwargs.get('plot')
+
+        t_idxs = [np.where(x_ser == t)[0][0] for t in t_s]
+        markers = kwargs.get('markers', list(mlines.Line2D.markers.keys())[:len(t_idxs)])
+        proj_pcas_t = {e: {t: [projs[pca_comp][t_idx] for pca_comp in pca_comps_2plot]
+                           for t_idx, t in zip(t_idxs, t_s)}
+                       for e, projs in self.projected_pca_ts_by_cond[prop].items()}
+        for pi, pip in enumerate(proj_pcas_t):
+            for ti, t in enumerate(t_s):
+                ax.scatter(*proj_pcas_t[pip][t], marker=markers[ti], c=f'C{pi}', label=pip, s=50)
+
+        ax.legend()
+        format_axis(ax)
+        ax.set_xlabel(f'PC {pca_comps_2plot[0]}')
+        ax.set_ylabel(f'PC {pca_comps_2plot[1]}')
+
+        fig.set_layout_engine('tight')
+        self.scatter_plot = fig, ax
+
+    def plot_3d_pca_ts(self, prop, event_window, **kwargs):
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from scipy.ndimage import gaussian_filter1d
+
+        pca_comps_2plot = kwargs.get('pca_comps_2plot', [0, 1, 2])
+        minimal_axes = kwargs.get('minimal_axes', True)
+        show_triad = kwargs.get('show_triad', True)  # << new
+        triad_len_frac = kwargs.get('triad_len_frac', 0.12)  # << new (fraction of axis span)
+        triad_off_frac = kwargs.get('triad_off_frac', 0.04)  # << new (margin from min corner)
+
+        if kwargs.get('plot', None) is None:
+            fig, axes = plt.subplots(
+                ncols=kwargs.get('n_cols', 1),
+                subplot_kw={"projection": "3d"},
+                figsize=(10, 10)
+            )
+        else:
+            fig, axes = kwargs.get('plot')
+
+        if isinstance(axes, plt.Axes):
+            axes = [axes]
+
+        # --- data prep ---
+        smoothing = kwargs.get('smoothing', 3)
+        proj_ts = {
+            e: {pc: self.projected_pca_ts_by_cond[prop][e][pc] for pc in pca_comps_2plot}
+            for e in self.projected_pca_ts_by_cond[prop].keys()
+        }
+        proj_ts = {
+            e: {pc: gaussian_filter1d(proj_ts[e][pc], smoothing) for pc in pca_comps_2plot}
+            for e in self.projected_pca_ts_by_cond[prop].keys()
+        }
+        proj_ts_arrs = {e: np.vstack(list(pip_projs.values())) for e, pip_projs in proj_ts.items()}
+
+        t0_time_s = kwargs.get('t0_time', 0)
+        t_end_s = kwargs.get('t_end', event_window[1])
+        x_ser = kwargs.get('x_ser', None)
+        if x_ser is None:
+            x_ser = np.round(
+                np.linspace(event_window[0], event_window[1], list(proj_ts.values())[0][pca_comps_2plot[0]].shape[-1]),
+                2
+            )
+        t0_time_idx = np.where(x_ser == t0_time_s)[0][0]
+        t_end_idx = np.where(x_ser == t_end_s)[0][0]
+
+        if kwargs.get('align_trajs'):
+            align_window = kwargs.get('align_window', [t0_time_s, t_end_s])
+            align_window_mask = np.array([t >= align_window[0] or t <= align_window[1] for t in x_ser])
+            ref_proj = list(proj_ts_arrs.values())[0]
+            proj_ts_arrs = {
+                e: (cca_align_pca_timeseries(ref_proj, projs, align_window_mask)[1]) if ei >= 0 else projs
+                for ei, (e, projs) in enumerate(list(proj_ts_arrs.items()))
+            }
+
+        # --- plotting ---
+        for ei, (e, proj_pcas) in enumerate(proj_ts_arrs.items()):
+            t0_points = [proj_pcas[pc][t0_time_idx] for pc, _ in enumerate(pca_comps_2plot)]
+            t_end_points = [proj_pcas[pc][t_end_idx] for pc, _ in enumerate(pca_comps_2plot)]
+            for ax in axes:
+                idxs_in_event = np.logical_and(x_ser >= t0_time_s, x_ser <= t_end_s)
+                idxs_out_event = np.logical_or(x_ser < t0_time_s, x_ser > t_end_s)
+                for ii, (in_event, in_event_ls) in enumerate(zip([idxs_in_event, idxs_out_event],
+                                                                 kwargs.get('in_event_ls', ['-', '--']))):
+                    if not kwargs.get('plot_out_event', True) and ii == 1:
+                        continue
+                    masked_ts = [proj_pcas[pc].copy() for pc, _ in enumerate(pca_comps_2plot)]
+                    for pc, _ in enumerate(masked_ts): masked_ts[pc][~in_event] = np.nan
+                    ax.plot(*masked_ts, c=f'C{ei}', label=e if ii == 0 else None, ls=in_event_ls)
+
+                scatter_kwargs = kwargs.get('scatter_kwargs', {})
+                markers = scatter_kwargs.get('markers', ['v', 's'])
+                size = scatter_kwargs.get('size', 20)
+                ax.scatter(*t0_points, c=f'C{ei}', marker=markers[0], s=size)
+                ax.scatter(*t_end_points, c=f'C{ei}', marker=markers[1], s=size)
+
+                if kwargs.get('scatter_times'):
+                    t_pnts = kwargs.get('scatter_times')
+                    if not isinstance(t_pnts, list): t_pnts = [t_pnts]
+                    for t_pnt in t_pnts:
+                        t_pnt_idx = np.where(x_ser == t_pnt)[0][0]
+                        t_pnts_pca = [proj_pcas[pc][t_pnt_idx] for pc in range(len(proj_pcas))]
+                        ax.scatter(*t_pnts_pca, **scatter_kwargs)
+
+                # keep axis names for tooltips, but we'll draw a triad instead
+                ax.set_xlabel(f'PC{pca_comps_2plot[0]}')
+                ax.set_ylabel(f'PC{pca_comps_2plot[1]}')
+                ax.set_zlabel(f'PC{pca_comps_2plot[2]}')
+
+        # --- view / legend ---
+        axes[0].view_init(elev=22, azim=30)
+        axes[0].legend()
+
+        # --- styling ---
+        fig.patch.set_facecolor('white')
+        for ax in axes:
+            ax.set_facecolor('white')
+            ax.grid(False)
+
+            # Remove panes/bounding box/axis lines (3D "spines")
+            for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+                try:
+                    axis.pane.fill = False
+                    axis.pane.set_edgecolor('white')
+                    axis.line.set_color((1, 1, 1, 0))
+                except Exception:
+                    pass
+            for attr in ('w_xaxis', 'w_yaxis', 'w_zaxis'):
+                if hasattr(ax, attr):
+                    getattr(ax, attr).line.set_visible(False)
+
+            # --- ticks: remove X ticks only ---
+            ax.set_xticks([])
+            ax.set_xticklabels([])
+            if minimal_axes:
+                ax.set_yticks([])
+                ax.set_zticks([])
+                ax.set_yticklabels([])
+                ax.set_zticklabels([])
+
+            # --- rotating axis triad in lower-left data corner ---
+            if show_triad:
+                xl, yl, zl = ax.get_xlim3d(), ax.get_ylim3d(), ax.get_zlim3d()
+                dx, dy, dz = (xl[1] - xl[0]), (yl[1] - yl[0]), (zl[1] - zl[0])
+                # offset from min corner
+                x0 = xl[0] + triad_off_frac * dx
+                y0 = yl[0] + triad_off_frac * dy
+                z0 = zl[0] + triad_off_frac * dz
+                Lx, Ly, Lz = triad_len_frac * dx, triad_len_frac * dy, triad_len_frac * dz
+
+                # arrows (these rotate with the 3D view)
+                ax.quiver(x0, y0, z0, Lx, 0, 0, arrow_length_ratio=0.2, color='k')
+                ax.quiver(x0, y0, z0, 0, Ly, 0, arrow_length_ratio=0.2, color='k')
+                ax.quiver(x0, y0, z0, 0, 0, Lz, arrow_length_ratio=0.2, color='k')
+
+                # labels at arrow tips
+                ax.text(x0 + Lx, y0, z0, 'PCA 1', ha='left', va='center')
+                ax.text(x0, y0 + Ly, z0, 'PCA 2', ha='left', va='center')
+                ax.text(x0, y0, z0 + Lz, 'PCA 3', ha='left', va='bottom')
+
+        self.proj_3d_plot = fig,axes
+        fig.tight_layout()
+        fig.show()
+        return fig, axes
+
+    def plot_2d_pca_ts(self, prop, event_window, **kwargs):
+        pca_comps_2plot = kwargs.get('pca_comps_2plot', [0, 1])
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        # Get projections
+        smoothing = kwargs.get('smoothing', 3)
+        proj_ts = {e: {pca_comp: self.projected_pca_ts_by_cond[prop][e][pca_comp] for pca_comp in pca_comps_2plot}
+                   for e in self.projected_pca_ts_by_cond[prop].keys()}
+
+        # Smooth projections
+        proj_ts = {e: {pca_comp: gaussian_filter1d(proj_ts[e][pca_comp], smoothing) for pca_comp in pca_comps_2plot}
+                   for e in self.projected_pca_ts_by_cond[prop].keys()}
+
+        # Get time series and initial points
+        t0_time_s = kwargs.get('t0_time', 0)
+        t_end_s = kwargs.get('t_end', event_window[1])
+        x_ser = kwargs.get('x_ser', None)
+        if x_ser is None:
+            x_ser = np.round(np.linspace(event_window[0], event_window[1], list(proj_ts.values())[0].shape[-1]), 2)
+
+        t0_time_idx = np.where(x_ser == t0_time_s)[0][0]
+        t_end_idx = np.where(x_ser == t_end_s)[0][0]
+
+        proj_ts_arrs = {e: np.vstack(list(pip_projs.values())) for e, pip_projs in proj_ts.items()}
+
+        if kwargs.get('align_trajs'):
+            align_window = kwargs.get('align_window', [t0_time_s, t_end_s])
+            align_window_mask = np.array([t >= align_window[0] or t <= align_window[1] for t in x_ser])
+            ref_proj = list(proj_ts_arrs.values())[0]
+            proj_ts_arrs = {
+                e: (cca_align_pca_timeseries(ref_proj, projs, align_window_mask)[1]) if ei >= 0 else projs
+                for ei, (e, projs) in enumerate(list(proj_ts_arrs.items()))
+            }
+
+        for ei, (e, proj_pcas) in enumerate(proj_ts_arrs.items()):
+            t0_points = [proj_pcas[pca_comp][t0_time_idx] for pca_comp, _ in enumerate(pca_comps_2plot)]
+            t_end_points = [proj_pcas[pca_comp][t_end_idx] for pca_comp, _ in enumerate(pca_comps_2plot)]
+
+            idxs_in_event = np.logical_and(x_ser >= t0_time_s, x_ser <= t_end_s)
+            idxs_out_event = np.logical_or(x_ser < t0_time_s, x_ser > t_end_s)
+
+            for ii, (in_event, in_event_ls) in enumerate(zip([idxs_in_event, idxs_out_event],
+                                                             kwargs.get('in_event_ls', ['-', '--']))):
+                if not kwargs.get('plot_out_event', True) and ii == 1:
+                    continue
+
+                masked_ts = [proj_pcas[pca_comp].copy() for pca_comp, _ in enumerate(pca_comps_2plot)]
+                for pca_comp, _ in enumerate(masked_ts):
+                    masked_ts[pca_comp][np.invert(in_event)] = np.nan
+
+                ax.plot(*masked_ts, c=f'C{ei}', label=e if ii == 0 else None, ls=in_event_ls)
+
+            scatter_kwargs = kwargs.get('scatter_kwargs', {})
+            markers = scatter_kwargs.get('markers', ['v', 's'])
+            size = scatter_kwargs.get('size', 20)
+            ax.scatter(*t0_points, c=f'C{ei}', marker=markers[0], s=size)
+            ax.scatter(*t_end_points, c=f'C{ei}', marker=markers[1], s=size)
+
+            if kwargs.get('scatter_times'):
+                t_pnts = kwargs.get('scatter_times')
+
+                if not isinstance(t_pnts, list):
+                    t_pnts = [t_pnts]
+                for t_pnt in t_pnts:
+                    t_pnt_idx = np.where(x_ser == t_pnt)[0][0]
+                    t_pnts_pca = [pca_comp[t_pnt_idx] for pca_comp in proj_pcas.values()]
+                    ax.scatter(*t_pnts_pca, **scatter_kwargs)
+
+        ax.set_xlabel(f'PC{pca_comps_2plot[0]}')
+        ax.set_ylabel(f'PC{pca_comps_2plot[1]}')
+        ax.legend()
+        fig.show()
+
+        self.proj_2d_plot = fig,ax
 
 
 def get_event_response(event_response_dict, event):
@@ -40,14 +349,6 @@ def get_event_response(event_response_dict, event):
     event_responses = [np.squeeze(e) for e in event_responses]
 
     return event_responses
-
-
-def get_event_trajs(event_response_dict, event, pc_idxs,X_pca, subset=None, mean_axis=None):
-    event_trials = get_event_response(event_response_dict, event)
-    projected_trials_by_event = [project_pca(trial, X_pca, standardise=False)
-                                 for trial in event_trials]
-    by_pc_traj = format_tractories(projected_trials_by_event, pc_idxs, subset=subset, mean_axis=mean_axis)
-    return by_pc_traj
 
 
 def format_tractories(trajectories, pc_idxs, subset=None, mean_axis=None):
@@ -60,17 +361,6 @@ def format_tractories(trajectories, pc_idxs, subset=None, mean_axis=None):
         by_pc_traj = [traj.mean(axis=mean_axis) for traj in by_pc_traj]
 
     return by_pc_traj
-
-def get_population_pca(rate_arr:np.ndarray):
-
-    assert rate_arr.ndim == 3
-
-
-def z_score(X):
-    # X: ndarray, shape (n_features, n_samples)
-    ss = StandardScaler(with_mean=False, with_std=False)
-    Xz = ss.fit_transform(X.T).T
-    return Xz
 
 
 def compute_eig_vals(X,plot_flag=False):
@@ -165,495 +455,230 @@ def plot_pca_ts(X_proj_by_event, events, window, plot=None, n_components=3,plot_
     return fig, axes
 
 
-def run_gpfa(spike_trains:list[list[neo.SpikeTrain]],bin_dur=0.02,latent_dimensionality=2):
 
-    gpfa_ndim = GPFA(bin_size=bin_dur*s, x_dim=latent_dimensionality)
-    trajectories = gpfa_ndim.fit_transform(spike_trains)
-    # trajectories = gpfa_ndim.transform(spike_trains)
-    return gpfa_ndim, trajectories
+def cca_align_pca_timeseries(
+    X_ref, X_tgt, time_mask, n_components=None, standardise=True, fix_signs=True
+):
+    """
+    Align two PCA×time trajectories via CCA trained on a subset of timepoints,
+    then apply the learned transforms to the full trajectories.
 
+    Parameters
+    ----------
+    X_ref : (n_pcs, n_times) array
+        Reference subject PCA time series.
+    X_tgt : (n_pcs, n_times) array
+        Target subject PCA time series to align to the reference.
+    time_mask : (n_times,) boolean array
+        True for the timepoints used to FIT CCA (alignment window).
+    n_components : int or None
+        Number of canonical components to extract. If None, uses
+        min(n_pcs_ref, n_pcs_tgt).
+    standardise : bool
+        If True, z-score features using stats computed on the subset; then
+        apply the same scaling to the full series.
+    fix_signs : bool
+        If True, flips canonical components so correlations on the subset are positive.
 
-def cross_val_gpfa(spike_trains, x_dims):
-    log_likelihoods = []
-    for x_dim in x_dims:
-        gpfa_cv = GPFA(x_dim=x_dim)
-        # estimate the log-likelihood for the given dimensionality as the mean of the log-likelihoods from 3 cross-vailidation folds
-        cv_log_likelihoods = cross_val_score(gpfa_cv, spike_trains, cv=3, n_jobs=cpu_count()-1, verbose=True,
-                                             error_score='raise')
-        log_likelihoods.append(np.mean(cv_log_likelihoods))
+    Returns
+    -------
+    X_ref_c_full : (n_components, n_times) array
+        Reference canonical time series for the full time axis.
+    X_tgt_c_full : (n_components, n_times) array
+        Target canonical time series, aligned to reference space, full time axis.
+    cca : fitted sklearn.cross_decomposition.CCA
+        The fitted CCA model (you can reuse it to transform other events).
+    meta : dict
+        Useful info: scalers, applied sign flips, feature indices, etc.
+    """
+    # --- Validate & harmonize feature dims ---
+    n_pcs_ref, n_times_ref = X_ref.shape
+    n_pcs_tgt, n_times_tgt = X_tgt.shape
+    if n_times_ref != n_times_tgt:
+        raise ValueError(f"Time dimension mismatch: {n_times_ref} vs {n_times_tgt}")
+    if time_mask.dtype != bool or time_mask.shape[0] != n_times_ref:
+        raise ValueError("time_mask must be boolean of length n_times")
 
-    return log_likelihoods
+    # Use common feature count if they differ
+    n_feat = min(n_pcs_ref, n_pcs_tgt)
+    if n_pcs_ref != n_pcs_tgt:
+        # Keep leading PCs; adjust here if you prefer another selection
+        X_ref = X_ref[:n_feat, :]
+        X_tgt = X_tgt[:n_feat, :]
 
+    # Transpose to samples×features for CCA
+    Xr = X_ref.T          # (n_times, n_feat)
+    Xt = X_tgt.T          # (n_times, n_feat)
+    Xr_sub = Xr[time_mask]
+    Xt_sub = Xt[time_mask]
 
-def plot_pca_traj(by_pc_traj, pc_idxs, mean_axis=None, plot=None, subset=None, plt_kwargs=None):
-
-    if plot:
-        fig: plt.Figure = plot[0]
-        ax:plt.Axes = plot[1]
-        assert not isinstance(ax,np.ndarray), 'ax must be a single axis'
+    # Standardize using subset stats, apply to full series
+    if standardise:
+        scaler_r = StandardScaler().fit(Xr_sub)
+        scaler_t = StandardScaler().fit(Xt_sub)
+        Xr_full_std = scaler_r.transform(Xr)
+        Xt_full_std = scaler_t.transform(Xt)
+        Xr_sub_std  = Xr_full_std[time_mask]
+        Xt_sub_std  = Xt_full_std[time_mask]
     else:
-        plot = plt.subplots()
-        fig: plt.Figure = plot[0]
-        ax: plt.Axes = plot[1]
-    to_plot = [e.mean(axis=mean_axis) for e in by_pc_traj] if mean_axis is not None else by_pc_traj
-    if len(pc_idxs) == 2:
-        ax.plot(to_plot[pc_idxs[0]], to_plot[pc_idxs[1]], **plt_kwargs)
-    elif len(pc_idxs) > 2:
-        ax.plot(to_plot[pc_idxs[0]], to_plot[pc_idxs[1]],to_plot[pc_idxs[2]], **plt_kwargs)
-    if mean_axis is not None:
-        if len(pc_idxs) == 2:
-            ax.scatter(to_plot[pc_idxs[0]][0], to_plot[pc_idxs[1]][0], c=plt_kwargs.get('c', 'k'))
-        elif len(pc_idxs) > 2:
-            ax.scatter(to_plot[pc_idxs[0]][0], to_plot[pc_idxs[1]][0], to_plot[pc_idxs[2]][0],
-                       c=plt_kwargs.get('c', 'k'))
+        scaler_r = scaler_t = None
+        Xr_full_std, Xt_full_std = Xr, Xt
+        Xr_sub_std,  Xt_sub_std  = Xr_sub, Xt_sub
 
-    set_label_funcs = (ax.set_xlabel,ax.set_ylabel)
-    [label_ax(f'PC {pc_idx}') for label_ax,pc_idx in zip(set_label_funcs,pc_idxs)]
-    ax.set_xlabel(f'PC {pc_idxs[0]}')
-    ax.set_ylabel(f'PC {pc_idxs[1]}')
-    # return fig,ax
+    # Number of canonical components
+    if n_components is None:
+        n_components = n_feat
+    n_components = min(n_components, n_feat)
 
-def style_3d_ax(ax):
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_zticks([])
-    ax.xaxis.pane.fill = False
-    ax.yaxis.pane.fill = False
-    ax.zaxis.pane.fill = False
-    ax.xaxis.pane.set_edgecolor('w')
-    ax.yaxis.pane.set_edgecolor('w')
-    ax.zaxis.pane.set_edgecolor('w')
-    ax.set_xlabel('PC 1')
-    ax.set_ylabel('PC 2')
-    ax.set_zlabel('PC 3')
+    # Fit CCA on the subset only
+    cca = CCA(n_components=n_components)
+    Zr_sub, Zt_sub = cca.fit(Xr_sub_std, Xt_sub_std).transform(Xr_sub_std, Xt_sub_std)
 
+    # Transform FULL time series with the fitted model
+    Zr_full, Zt_full = cca.transform(Xr_full_std, Xt_full_std)  # (n_times, n_components)
 
-def compute_mi(x,cond_responses_by_prop: list | dict |np.ndarray,
-               bins:np.ndarray):
+    # Optional: fix signs to make subset correlations positive component-wise
+    flips = np.ones(n_components)
+    if fix_signs:
+        # compute Pearson sign on subset and flip Zt to match Zr
+        for k in range(n_components):
+            r = np.corrcoef(Zr_sub[:, k], Zt_sub[:, k])[0, 1]
+            if np.isnan(r) or r < 0:
+                Zt_full[:, k] *= -1
+                Zt_sub[:, k]  *= -1
+                flips[k] = -1.0
 
-    p_x, _ = np.histogram(x, density=True, bins=bins)
-    p_x = p_x[p_x > 0]
-    p_x = p_x / p_x.sum()
+    # Return in (components × time) like your input
+    X_ref_c_full = Zr_full.T
+    X_tgt_c_full = Zt_full.T
 
-    # entropy_x = entropy(x)
-    entropy_x = -(p_x * np.log2(p_x)).sum()
-    # entropy_x = -np.sum(p_x*np.log2(p_x +1e-5))
-    # print(entropy_x)
-    assert entropy_x >= 0, f'{entropy_x = } {p_x = }'
-    entropy_x_given_y_vals = []
-    p_y = np.array([len(cur_list) for cur_list in cond_responses_by_prop[0]])
-    p_y  = p_y / np.sum(p_y)
-    print(f'{p_y = }')
-    for cond_responses in cond_responses_by_prop:
-        x_given_y = np.hstack(cond_responses)
-        # get kde of x_given_y
-        # model = KernelDensity()
-        # model.fit(x_given_y.reshape(-1, 1))
-        # probabilities = model.score_samples(np.linspace(bins.min(), bins.max(), len(bins)).reshape(-1, 1))
-        # probabilities = np.exp(probabilities)
-        # p_x_given_y = probabilities[probabilities > 0.0]
-        p_x_given_y, _ = np.histogram(x_given_y, density=True, bins=bins)
-        p_x_given_y = p_x_given_y[p_x_given_y > 0]
-        p_x_given_y = p_x_given_y/p_x_given_y.sum()
-        p_x_given_y = p_x_given_y / p_x_given_y.sum()
-        print(p_x_given_y)
-        # p_x_given_y = p_x_given_y[p_x_given_y > 0]
-        # [print(e.max()) for e in cond_responses]
-        # p_x_given_y, _ = np.histogram(x_given_y[x_given_y>0], density=True, bins=bins)
-        # p_x_given_y = p_x_given_y[p_x_given_y > 0]
-        # entropy_x_given_y_vals += [entropy(np.hstack(cond_responses))]
-        entropy_x_given_y_vals += [-np.sum(p_x_given_y* np.log(p_x_given_y))]
-    assert ((entropy_x - np.array(entropy_x_given_y_vals) @ p_y) < 0).sum() == 0, f'{entropy_x = } {entropy_x_given_y_vals = }'
-    return entropy_x - np.array(entropy_x_given_y_vals) @ p_y
-    # return np.mean(mis_by_prop)
-    #
-    # for j in range(len_abs):  # loop over different rules
-    #     # p_x_given_y is the distribution of responses to stimuli following rule y
-    #     p_x_given_y, _ = np.histogram(y_h_trials_one[:, j, :, t, i], density=True, bins=bins)
-    #     entropy_x_given_y_vals += [
-    #         - np.sum(dx * p_x_given_y * np.log2(p_x_given_y + 1e-9))]  # entropy for a single rule
+    meta = {
+        "scaler_ref": scaler_r,
+        "scaler_tgt": scaler_t,
+        "n_components": n_components,
+        "n_features_used": n_feat,
+        "sign_flips_tgt": flips,
+        "time_mask": time_mask.copy(),
+    }
+    return X_ref_c_full, X_tgt_c_full, cca, meta
 
+def procrustes_align_pca_timeseries(
+    X_ref, X_tgt, time_mask, n_components=None, standardise=False, fix_signs=False
+):
+    """
+    Align two PCA×time trajectories via Orthogonal Procrustes (rotation-only)
+    trained on a subset of timepoints, then apply to the full trajectories.
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('config_file')
-    parser.add_argument('pkldir')
-    parser.add_argument('--sessname',default=None)
-    args = parser.parse_args()
-    with open(args.config_file, 'r') as file:
-        config = yaml.safe_load(file)
-    sys_os = platform.system().lower()
-    ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
+    Parameters
+    ----------
+    X_ref : (n_pcs, n_times) array
+        Reference PCA time series.
+    X_tgt : (n_pcs, n_times) array
+        Target PCA time series to align to the reference.
+    time_mask : (n_times,) boolean array
+        True for the timepoints used to FIT the rotation (alignment window).
+    n_components : int or None
+        Number of PCs to keep after alignment (from the reference ordering).
+        If None, uses min(n_pcs_ref, n_pcs_tgt).
+    standardise : bool
+        If True, z-score each series using stats computed on the subset, then
+        apply the same scaling to the full series. Returned results are mapped
+        back to the reference's ORIGINAL units.
+    fix_signs : bool
+        If True, flips individual aligned target axes so correlations with the
+        reference on the subset are positive (after rotation).
 
-    if sys_os == 'windows':
-        import pathlib
-        temp = pathlib.PosixPath
-        pathlib.PosixPath = pathlib.WindowsPath
+    Returns
+    -------
+    X_ref_full : (n_components, n_times)
+        Reference time series (possibly standardised then *inverse* transformed
+        back to original units), truncated to n_components.
+    X_tgt_aligned_full : (n_components, n_times)
+        Target time series rotated into the reference space (and mapped back to
+        the reference's units), full time axis.
+    R : (n_feat, n_feat) ndarray
+        The orthogonal rotation matrix learned on the subset (acts on features).
+    meta : dict
+        {"scaler_ref","scaler_tgt","n_components","n_features_used",
+         "sign_flips_tgt","time_mask","op_scale"}
+    """
+    # --- validate shapes ---
+    X_ref = np.asarray(X_ref)
+    X_tgt = np.asarray(X_tgt)
+    time_mask = np.asarray(time_mask, dtype=bool)
 
-    sessions = {}
-    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv')
-    session_topology = pd.read_csv(sess_topology_path)
-    # sessname = 'DO81_240529b' if args.sessname is None else args.sessname
-    sessnames = args.sessname.split('-')
-    pkldir = ceph_dir / posix_from_win(args.pkldir)
-    standardise_flag = False
-    figdir = ceph_dir/'Dammy'/'figures'/f'popualation_analysis_trial_concat'
-    if standardise_flag and 'standardised' not in figdir.stem:
-        figdir = figdir.with_stem(f'{figdir.stem}_standardised')
+    n_pcs_ref, n_times_ref = X_ref.shape
+    n_pcs_tgt, n_times_tgt = X_tgt.shape
+    if n_times_ref != n_times_tgt:
+        raise ValueError(f"Time dimension mismatch: {n_times_ref} vs {n_times_tgt}")
+    if time_mask.shape[0] != n_times_ref:
+        raise ValueError("time_mask must be boolean of length n_times")
 
-    if not figdir.is_dir():
-        figdir.mkdir(parents=True)
-    for sessname in sessnames:
-        name,date,sess_idx,sess_info = get_sess_name_date_idx(sessname,session_topology)
-        assert pkldir.is_dir()
-        sess_pkls = list(pkldir.glob(f'{sessname}.pkl'))
-        with open(sess_pkls[0], 'rb') as f:
-            sessions[sessname]: Session = pickle.load(f)
-        # sessions[sessname]: Session = pd.read_pickle(sess_pkls[0])
+    # --- harmonize feature count ---
+    n_feat = min(n_pcs_ref, n_pcs_tgt)
+    X_ref = X_ref[:n_feat, :]
+    X_tgt = X_tgt[:n_feat, :]
+    if n_components is None:
+        n_components = n_feat
+    n_components = min(n_components, n_feat)
 
-        window = [-0.0,0.25]
-        plot_dist_metrics = False
-        # window = [0,2]
-        for e in list(sessions[sessname].sound_event_dict.keys()):
-            sessions[sessname].spike_obj.get_event_spikes(sessions[sessname].sound_event_dict[e].times,e,window,
-                                                          get_spike_matrix=False)
+    # Work in samples×features form
+    Xr = X_ref.T            # (n_times, n_feat)
+    Xt = X_tgt.T            # (n_times, n_feat)
+    Xr_sub = Xr[time_mask]  # (n_sub, n_feat)
+    Xt_sub = Xt[time_mask]
 
-        # sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir)
+    # Standardize using subset stats; keep objects for inverse-transform
+    if standardise:
+        scaler_r = StandardScaler().fit(Xr_sub)
+        scaler_t = StandardScaler().fit(Xt_sub)
+        Xr_full_std = scaler_r.transform(Xr)
+        Xt_full_std = scaler_t.transform(Xt)
+        Xr_sub_std  = Xr_full_std[time_mask]
+        Xt_sub_std  = Xt_full_std[time_mask]
+    else:
+        scaler_r = scaler_t = None
+        Xr_full_std, Xt_full_std = Xr, Xt
+        Xr_sub_std,  Xt_sub_std  = Xr_sub, Xt_sub
 
+    # --- learn orthogonal rotation on the subset ---
+    # Find R such that Xt_sub_std @ R ≈ Xr_sub_std
+    R, op_scale = orthogonal_procrustes(Xt_sub_std, Xr_sub_std)  # R: (n_feat, n_feat)
 
+    # Apply rotation to FULL time axis (still in standardized units if used)
+    Xt_full_rot = Xt_full_std @ R
+    Xt_sub_rot  = Xt_sub_std  @ R
 
-        all_events = [e for e in sessions[sessname].sound_event_dict.keys() if any(pip in e for pip in ['A','B','C','D'])]
-        event_psth_dict = {e: get_predictor_from_psth(sessions[sessname], e, [-2,3], window,mean=None,
-                                                      use_unit_zscore=True, use_iti_zscore=False,baseline=0)
-                           for e in all_events}
-        full_event_psth_dict = {e: get_predictor_from_psth(sessions[sessname], e, [-2, 3], [0,1], mean=None,
-                                                           use_unit_zscore=True, use_iti_zscore=False, baseline=0)
-                                for e in [f'A-{i}' for i in range(4)]}
-        _all_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-                       for e in all_events]
-        event_psth_dict['full_normal'] = get_predictor_from_psth(sessions[sessname], 'A-0',[-2,3], [-0.1,1], mean=None,
-                                                                  use_unit_zscore=True, use_iti_zscore=False)
-        if 4 in sessions[sessname].td_df['Stage'].values:
-            event_psth_dict['full_deviant'] = get_predictor_from_psth(sessions[sessname], 'A-1', [-2, 3], [-0.1, 1],
-                                                                      mean=None,
-                                                                      use_unit_zscore=True, use_iti_zscore=False)
-        # _all_trials = np.split(np.array(trial_oscillator),6)
-        x_ser = np.linspace(window[0], window[1], _all_trials[0][0].shape[-1])
-        try:
-            timepoints = [np.argwhere(x_ser==t)[0][0] for t in np.arange(0.25,1.25,0.25)]
-        except IndexError:
-            timepoints=[np.argwhere(x_ser==x_ser[-1])[0][0]]
-        _all_trials = [[np.squeeze(ee) for ee in e] for e in _all_trials]
-        Xa_trial_concatenated = np.hstack(sum(_all_trials, []))
-        Xa_trial_averaged = [np.mean(e,axis=0) for e in _all_trials]
-        Xa_trial_concatenated_pca = compute_trial_averaged_pca(Xa_trial_concatenated, n_components=15, standardise=standardise_flag)
-        Xa_trial_averaged_pca = compute_trial_averaged_pca(np.hstack([e for e in Xa_trial_averaged]),
-                                                           n_components=15, standardise=standardise_flag)
-        eig_vals = compute_eig_vals(Xa_trial_concatenated,plot_flag=True)
-        eig_vals_averaged = compute_eig_vals(np.hstack(Xa_trial_averaged),plot_flag=True)
-        eig_vals_averaged[2][0].show()
-        n_comp_toplot = 8
-        pca_ts_plot = plt.subplots(4,n_comp_toplot,figsize=[100,15],squeeze=False)
-        rules = ['ABCD 0','ABBA 0','ABCD 1','ABBA 1','ABCD 2','ABBA 2']
-        pca_scatter_plot = plt.subplots(ncols=3,figsize=[15,5])
-        # for ii,pip in enumerate(['A','B','C','D']):
-        #     events = [e for e in all_events if e[0] == pip]
-        #     # for event in events:
-        #     #
-        #     #     event_psth_dict[event] = get_predictor_from_psth(sessions[sessname], event, [-2,3], window,mean=None,
-        #     #                                                      use_unit_zscore=False, use_iti_zscore=False)
-        #     # Xa_trial_averaged = np.hstack([event_psth_dict[e].mean(axis=0) for e in events])
-        #     # x_shape = event_psth_dict[events[0]].shape
-        #     # eig_vals = compute_eig_vals(Xa_trial_averaged,plot_flag=True)
-        #     # Xa_trial_averaged_pca = compute_trial_averaged_pca(Xa_trial_averaged,n_components=15,standardise=standardise_flag)
-        #     # projected_trials_by_event = [[project_pca(trial,Xa_trial_averaged_pca,standardise=standardise_flag)
-        #     #                               for trial in trials_by_event] for trials_by_event in event_psth_dict.values()]
-        #     # plot_pca_ts(projected_trials_by_event,events,window,n_components=8,plot=[pca_ts_plot[0], pca_ts_plot[1][ii]])
-        #
-        #     # _all_trials = [np.array_split(event_psth_dict[e],event_psth_dict[e].shape[0],axis=0) for e in events]
-        #     # _all_trials = [[np.squeeze(ee) for ee in e] for e in _all_trials]
-        #     # Xa_trial_concatenated = np.hstack(sum(_all_trials,[]))
-        #
-        #     # eig_vals = compute_eig_vals(Xa_trial_concatenated,plot_flag=True)
-        #     # Xa_trial_concatenated_pca = compute_trial_averaged_pca(Xa_trial_concatenated,n_components=15,standardise=standardise_flag)
-        #
-        #     # event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-        #     #                 for e in events]
-        #     event_trials = [get_event_response(event_psth_dict,event) for event in events]
-        #
-        #     # event_trials = _all_trials
-        #     projected_trials_by_event = [[project_pca(trial,Xa_trial_concatenated_pca,standardise=standardise_flag)
-        #                                   for trial in trials_by_event] for trials_by_event in event_trials]
-        #     # projected_trials_by_event = [project_pca(trial, Xa_trial_averaged_pca, standardise=standardise_flag)
-        #     #                               for trial in Xa_trial_averaged]
-        #     plot_pca_ts(projected_trials_by_event,events,window,n_components=n_comp_toplot,plot=[pca_ts_plot[0], pca_ts_plot[1][ii]],ls={})
-        #
-        #     [[ax.axvline(t, ls='--', c='k') for t in np.arange(0,min([1,window[1]]),0.25)]
-        #      for ax in pca_ts_plot[1][ii]]
-        #
-        #     [[pca_scatter_plot[1][ci].scatter(np.array(proj)[:,comps[0],timepoints[-1]],
-        #                                       np.array(proj)[:,comps[1],timepoints[-1]],
-        #                                  c=f'C{ii}',label=pip,alpha=0.25,marker='o')
-        #      for ti,proj in enumerate(projected_trials_by_event)] for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
-        #     [(pca_scatter_plot[1][ci].set_xlabel(f'PC{comps[0]}'), pca_scatter_plot[1][ci].set_ylabel(f'PC{comps[1]}'))
-        #      for ci, comps in enumerate([[0,1],[0,2],[1,2]])]
-        #     # pca_ts_plot[1][ii]
-        # # pca_ts_plot[0].set_layout_engine('constrained')
-        # pca_ts_plot[0].show()
-        # pca_ts_plot[0].savefig(figdir/f'pca_ts_{sessname}.pdf')
-        # unique_legend(pca_scatter_plot[1],)
-        # pca_scatter_plot[0].savefig(figdir/f'pca_scatter_{sessname}.pdf')
-        # # pca_scatter_plot[1][-1].legend(ncols=len(rules))
-        # pca_scatter_plot[0].show()
+    # Optional: make each aligned component positively correlated with reference on the subset
+    flips = np.ones(n_feat)
+    if fix_signs:
+        for k in range(n_feat):
+            r = np.corrcoef(Xr_sub_std[:, k], Xt_sub_rot[:, k])[0, 1]
+            if np.isnan(r) or r < 0:
+                Xt_full_rot[:, k] *= -1
+                Xt_sub_rot[:, k]  *= -1
+                flips[k] = -1.0
 
-        # prepare trial averages
-        # pick the components corresponding to the x, y, and z axes
-        component_x = 0
-        component_y = 1
-        component_z = 2
+    # Map to reference's ORIGINAL units if we standardised
+    if standardise:
+        X_ref_full_units = scaler_r.inverse_transform(Xr_full_std)     # reference back to its units
+        X_tgt_full_units = scaler_r.inverse_transform(Xt_full_rot)     # target in ref units
+    else:
+        X_ref_full_units = Xr_full_std
+        X_tgt_full_units = Xt_full_rot
 
-        # create a boolean mask so we can plot activity during stimulus as
-        # solid line, and pre and post stimulus as a dashed line
-        stim_mask = np.logical_and(x_ser>=0,x_ser<=0.25)
+    # Keep requested number of components (use reference ordering)
+    X_ref_full = X_ref_full_units[:, :n_components].T        # (n_components, n_times)
+    X_tgt_aligned_full = X_tgt_full_units[:, :n_components].T
 
-
-        # utility function to clean up and label the axes
-
-
-        sigma = 3  # smoothing amount
-
-        # set up a figure with two 3d subplots, so we can have two different views
-
-        fig,axes = plt.subplots(ncols=2, figsize=[9, 4],subplot_kw={'projection': '3d'})
-        pca_point_plot = plt.subplots(ncols=1, figsize=[9, 4],subplot_kw={'projection': '3d'})
-        pca_point_plot_slice_plot = plt.subplots(ncols=3)
-        # for ii,pip in enumerate(['A','B','C','D','base'][:1]):
-        #     events = [e for e in event_psth_dict if pip in e]
-        for ii, pip in enumerate([f'A-{i}' for i in range(4)]):
-            events = [e for e in event_psth_dict if pip in e]
-
-            # event_trials = [np.array_split(event_psth_dict[e], event_psth_dict[e].shape[0], axis=0)
-            #                 for e in events]
-            event_trials = [get_event_response(full_event_psth_dict, event) for event in events]
-            projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=standardise_flag)
-                                          for trial in trials_by_event] for trials_by_event in event_trials]
-            project_trials_arr = np.array(projected_trials_by_event)[0]
-            # pca_point_plot[1].scatter(project_trials_arr[:,0,0],project_trials_arr[:,1,0],project_trials_arr[:,2,0],
-            #                           c=f'C{ii}',alpha=0.25,marker='o')
-            pca_point_plot[1].scatter(project_trials_arr[:, 0, -1], project_trials_arr[:, 1, -1],
-                                      project_trials_arr[:, 2, -1],
-                                      c=f'C{ii}', alpha=0.5, marker='x')
-            [ax.scatter(project_trials_arr[:, pc[0], -1],project_trials_arr[:, pc[1], -1],
-                        c=f'C{ii}',alpha=0.5,marker='x') for
-             pc,ax in zip(list(combinations(range(3),2)),pca_point_plot_slice_plot[1])]
-            # [ax.scatter(project_trials_arr[:, pc[0], 0],project_trials_arr[:, pc[1], -1],
-            #             c=f'C{ii}',alpha=0.5,marker='o') for
-            #  pc,ax in zip(list(combinations(range(3),2)),pca_point_plot_slice_plot[1])]
-            for ax in axes:
-                for t, t_type in enumerate(projected_trials_by_event):
-                    proj_arr = np.array(t_type).mean(axis=0)
-                    # for every trial type, select the part of the component
-                    # which corresponds to that trial type:
-                    x = proj_arr[component_x]
-                    y = proj_arr[component_y]
-                    z = proj_arr[component_z]
-
-
-                    # # apply some smoothing to the trajectories
-                    x = gaussian_filter1d(x, sigma=sigma)
-                    y = gaussian_filter1d(y, sigma=sigma)
-                    z = gaussian_filter1d(z, sigma=sigma)
-
-                    # use the mask to plot stimulus and pre/post stimulus separately
-                    z_stim = z.copy()
-                    # z_stim[~stim_mask] = np.nan
-                    z_prepost = z.copy()
-                    # z_prepost[stim_mask] = np.nan
-
-                    ax.plot(x, y, z_stim, c=f'C{ii}',ls='-' if 'A' in pip else '--')
-                    ax.plot(x, y, z_prepost, c=f'C{ii}', ls=':')
-
-                    # plot dots at initial point
-                    ax.scatter(x[0], y[0], z[0], c=f'C{ii}', s=14,label=pip)
-                    ax.scatter(x[-1], y[-1], z[-1], c=f'C{ii}', s=14,label=pip,marker='x')
-
-                    # make the axes a bit cleaner
-                    style_3d_ax(ax)
-                    style_3d_ax(pca_point_plot[1])
-
-            # specify the orientation of the 3d plot
-            axes[0].view_init(elev=22, azim=30)
-            pca_point_plot[1].view_init(elev=22, azim=30)
-            # axes[0].set_title(f'{pip} 3D view')
-            # axes[1].view_init(elev=22, azim=110)
-        axes[-1].legend()
-        plt.tight_layout()
-
-        fig.show()
-        pca_point_plot[0].show()
-        pca_point_plot_slice_plot[0].show()
-        fig.savefig(figdir/f'pca_3d_{sessname}.pdf')
-
-        # for ii, pip in enumerate(['A', 'B', 'C', 'D']):
-        pip = 'A'
-        fig, axes = plt.subplots(ncols=2, figsize=[9, 4], subplot_kw={'projection': '3d'})
-        events = [e for e in event_psth_dict if e.startswith(pip)]
-
-
-        projected_trials_by_event = [[project_pca(trial, Xa_trial_averaged_pca, standardise=standardise_flag)
-                                      for trial in trials_by_event] for trials_by_event in event_trials]
-
-        by_cond_by_event_trajs = {}
-        n_pcs = 10
-        if 3 in sessions[sessname].td_df['Stage'].values:
-            # group by rare or freq
-            sessions[sessname].td_df['cum_patts'] = np.cumsum(sessions[sessname].td_df['Tone_Position'] == 0)
-            rare_filt = 'Tone_Position==0 and local_rate>=0.8'
-            freq_filt = 'Tone_Position==0 and local_rate<=0.1'
-
-            patt_trial_idxs = sessions[sessname].sound_event_dict['A-0'].trial_nums - 1
-
-            by_cond_trial_nums = [sessions[sessname].td_df.query(cond_filt).index.values
-                                  for cond_filt in [rare_filt, freq_filt]]
-            by_cond_trial_idxs = [[np.argwhere(idx == patt_trial_idxs)[0] for idx in cond_idxs if idx in patt_trial_idxs]
-                                  for cond_idxs in by_cond_trial_nums]
-            by_cond_trial_idxs = [np.hstack(e) for e in by_cond_trial_idxs]
-
-            cond_lbls = ['rare', 'freq']
-            by_cond_ls = ['-', '--']
-            [[by_cond_by_event_trajs.update({f'{e[0]}_{e_lbl}': get_event_trajs(event_psth_dict, e, list(range(n_pcs)),
-                                                                                Xa_trial_concatenated_pca,
-                                                                                subset=e_subset)})
-             for e in [f'{ee}-0' for ee in 'ABCD']]
-             for e_subset,e_lbl in zip(by_cond_trial_idxs,cond_lbls)]
-
-        if 4 in sessions[sessname].td_df['Stage'].values:
-            cond_lbls = ['normal', 'deviant']
-            by_cond_ls = ['-', '--']
-            normal_filt = 'Tone_Position==0 and Pattern_Type == 0 and Session_Block==2'
-            dev0_idx = sessions[sessname].td_df.query('Tone_Position==0 and Pattern_Type == 1').index.values[0]
-            normal_patt_trial_idxs = sessions[sessname].sound_event_dict['A-0'].trial_nums - 1
-
-            by_cond_trial_nums = [sessions[sessname].td_df.query(cond_filt).index.values
-                                  for cond_filt in [normal_filt]]
-            by_cond_trial_idxs = [
-                [np.argwhere(idx == normal_patt_trial_idxs)[0] for idx in cond_idxs if idx in normal_patt_trial_idxs]
-                for cond_idxs in by_cond_trial_nums]
-            by_cond_trial_idxs = [np.hstack(e) for e in by_cond_trial_idxs]
-
-            normal_subset = by_cond_trial_idxs[0] > dev0_idx
-            [[by_cond_by_event_trajs.update({f'{e[0]}_{e_lbl}': get_event_trajs(event_psth_dict, e, list(range(n_pcs)),
-                                                                                Xa_trial_concatenated_pca,
-                                                                                subset=cond_idxs)})
-              for e in [f'{ee}-{cond_i}' for ee in 'ABCD']]
-             for cond_i, (cond_idxs,e_lbl) in enumerate(zip([normal_subset, None], cond_lbls))]
-
-        pc_combs = list(combinations(range(3), 2))
-        pca_traj_plot = plt.subplots(ncols=len(pc_combs), figsize=[9, 4], sharey=True)
-        pca_traj_plot_3d = plt.subplots(figsize=(12,9),subplot_kw={'projection': '3d'})
-
-        for pi, pip in enumerate('ABCD'):
-            by_pc_traj = [by_cond_by_event_trajs[f'{pip}_{cond}'] for cond in cond_lbls]
-            # plot pc trajectories
-            [[[plot_pca_traj(trajs2plot, pc_comb, mean_axis=mean_type,
-                             plt_kwargs={'c':f'C{pi}', 'ls':cond_ls, 'lw':mean_lw, 'label': lbl},
-                             plot=(pca_traj_plot[0],pca_traj_plot[1][comb_i]))
-               for comb_i,pc_comb in enumerate(pc_combs)]
-             for trajs2plot,cond_ls,lbl in zip(by_pc_traj,by_cond_ls,cond_lbls)]
-             for mean_type, mean_lw in zip([0],[2,0.1])]
-            [[plot_pca_traj(trajs2plot, [0,1,2], mean_axis=mean_type,
-                            plt_kwargs={'c': f'C{pi}', 'ls': cond_ls, 'lw': mean_lw, 'label': lbl},
-                            plot=(pca_traj_plot_3d[0], pca_traj_plot_3d[1]))
-              for trajs2plot, cond_ls, lbl in zip(by_pc_traj, by_cond_ls, cond_lbls)]
-             for mean_type, mean_lw in zip([0], [2, 0.1])]
-        pca_traj_plot[0].legend(loc='upper right')
-        pca_traj_plot[0].tight_layout(rect=[0, 0, 0.9, 1])
-
-        pca_traj_plot[0].show()
-        pca_traj_plot[0].savefig(figdir/f'pca_trajs_{sessname}.pdf')
-
-        style_3d_ax(pca_traj_plot_3d[1])
-        pca_traj_plot_3d[0].legend(loc='upper right')
-        pca_traj_plot_3d[0].tight_layout(rect=[0, 0, 0.9, 1])
-
-        pca_traj_plot_3d[0].show()
-        pca_traj_plot_3d[0].savefig(figdir/f'pca_trajs_3d_{sessname}.pdf')
-
-        if plot_dist_metrics:
-            if 3 in sessions[sessname].td_df['Stage'].values:
-                [by_cond_by_event_trajs.update({f'full_{e_lbl}': get_event_trajs(event_psth_dict, e, list(range(n_pcs)),
-                                                                                 subset=e_subset)})
-                 for e_subset, e_lbl in zip(by_cond_trial_idxs, cond_lbls)]
-
-            if 4 in sessions[sessname].td_df['Stage'].values:
-                [by_cond_by_event_trajs.update({e: get_event_trajs(event_psth_dict, e, list(range(n_pcs)))})
-                 for e in ['full_normal','full_deviant']]
-            projected_pattern_pc123 = [by_cond_by_event_trajs[f'full_{cond}'] for cond in cond_lbls]
-            projection_sim_ts = [compare_pip_sims_2way([np.array(projected_pattern_pc123[0]).transpose((1,0,2)),
-                                                        np.array(projected_pattern_pc123[1]).transpose((1,0,2))],
-                                                       t=t,mean_flag=True)
-                                 for t in range(projected_pattern_pc123[0][0].shape[-1])]  # len = n time points
-            mean_comped_sims = np.array([[np.squeeze(pip_sims)[:, 0, 1] for pip_sims in
-                                          np.array_split(t_sim[0], (len(cond_lbls)))]
-                                         for t_sim in projection_sim_ts])
-            mean_cross_comped_sims = np.array([np.squeeze(t_sim[1][:, 0, 1]) for t_sim in projection_sim_ts])
-
-            full_pattern_xser = np.linspace(-0.1,1, projected_pattern_pc123[0][0].shape[1])
-            by_cond_sim_ts_plot = plt.subplots()
-            [by_cond_sim_ts_plot[1].plot(full_pattern_xser, mean_comped_sims[:, cond_i].mean(axis=1), label=cond_lbl)
-             for cond_i, cond_lbl in enumerate(cond_lbls)]
-            by_cond_sim_ts_plot[1].plot(full_pattern_xser, mean_cross_comped_sims.mean(axis=1), label=" vs ".join(cond_lbls),
-                                        c='k')
-            by_cond_sim_ts_plot[1].set_ylabel('cosine similarity')
-            by_cond_sim_ts_plot[1].set_xlabel('Time (s)')
-            by_cond_sim_ts_plot[1].set_title(f'{"vs ".join(cond_lbls)} response similarity')
-            by_cond_sim_ts_plot[0].legend()
-            by_cond_sim_ts_plot[0].show()
-            by_cond_sim_ts_plot[0].savefig(figdir/f'{"vs".join(cond_lbls)}_sim_ts_{sessname}.pdf')
-
-            projected_pattern_pc_means = [[ee.mean(axis=0) for ee in e] for e in projected_pattern_pc123]  # need to take mean of each event by cond
-            projection_distance_ts = [euclidean(np.array(projected_pattern_pc_means[0])[:, t],
-                                                np.array(projected_pattern_pc_means[1])[:, t])
-                                      for t in range(projected_pattern_pc_means[0][0].shape[0])]
-
-            pca_euc_dist_plot = plt.subplots()
-            pca_euc_dist_plot[1].plot(full_pattern_xser,projection_distance_ts)
-            pca_euc_dist_plot[1].set_ylabel('Euclidean distance')
-            pca_euc_dist_plot[1].set_xlabel('Time (s)')
-            pca_euc_dist_plot[1].set_title('Pattern response')
-            pca_euc_dist_plot[0].show()
-            pca_euc_dist_plot[0].savefig(figdir/f'pca_euc_dist_{sessname}.pdf')
-
-
-
-#
-# from mpl_toolkits.mplot3d import Axes3D
-# import numpy as np
-# from matplotlib import pyplot as plt
-# import matplotlib.animation as animation
-# import pandas as pd
-#
-# a = np.random.rand(2000, 3)*10
-# t = np.array([np.ones(100)*i for i in range(20)]).flatten()
-# df = pd.DataFrame({"time": t ,"x" : a[:,0], "y" : a[:,1], "z" : a[:,2]})
-#
-# def update_graph(num):
-#     data=df[df['time']==num]
-#     graph._offsets3d = (data.x, data.y, data.z)
-#     title.set_text('3D Test, time={}'.format(num))
-#     return graph, title
-#
-# fig = plt.figure()
-#
-# ax = fig.add_subplot(221, projection='3d')
-# ax2 = fig.add_subplot(222, projection='3d')
-# title = ax.set_title('3D Test')
-# ax.scatter(df.x, df.y, df.z)
-#
-# data=df[df['time']==0]
-# graph = ax2.scatter(data.x, data.y, data.z)
-#
-# ani = animation.FuncAnimation(fig, update_graph, 20,
-#                                    interval=50, blit=True)
-# ani.save('motion.gif', writer="imagemagick")
-# plt.show()
+    meta = {
+        "scaler_ref": scaler_r,
+        "scaler_tgt": scaler_t,
+        "n_components": n_components,
+        "n_features_used": n_feat,
+        "sign_flips_tgt": flips[:n_components],
+        "time_mask": time_mask.copy(),
+        "op_scale": op_scale,          # sum of singular values (diagnostic)
+        "R": R,                        # rotation (acts on features/PCs)
+    }
+    return X_ref_full, X_tgt_aligned_full, R, meta

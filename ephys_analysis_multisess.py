@@ -1,10 +1,17 @@
-from behviour_analysis_funcs import get_all_cond_filts
+import warnings
+
+import plot_funcs
+from behviour_analysis_funcs import get_all_cond_filts, get_main_sess_patterns, get_main_sess_td_df
+from decoding_funcs import predict_1d
 from ephys_analysis_funcs import *
 import platform
 import argparse
 import yaml
-from scipy.stats import pearsonr, ttest_ind,sem
+from scipy.stats import pearsonr, ttest_ind
 from scipy.signal import savgol_filter
+
+from io_utils import posix_from_win, load_sess_pkl
+from plot_funcs import plot_decoder_accuracy, plot_psth, plot_psth_ts, plot_ts_var
 from regression_funcs import run_glm, run_regression
 from neural_similarity_funcs import *
 from postprocessing_utils import get_sorting_dirs
@@ -12,6 +19,7 @@ from datetime import datetime
 from matplotlib.colors import TwoSlopeNorm
 import pandas as pd
 
+from sess_dataclasses import Session, get_predictor_from_psth
 
 if __name__ == "__main__":
     print('args')
@@ -19,10 +27,11 @@ if __name__ == "__main__":
     parser.add_argument('config_file')
     parser.add_argument('sess_date')
     parser.add_argument('--sorter_dirname',default='from_concat',required=False)
+    parser.add_argument('--sess_top_tag', default='')
     parser.add_argument('--sess_top_filts', default='')
     parser.add_argument('--synth_data',default=0,type=int)
     parser.add_argument('--rel_sorting_path',default='')
-    parser.add_argument('--ow',default=1)
+    parser.add_argument('--ow',default=1,type=int)
 
     args = parser.parse_args()
     print(f'{args = }')
@@ -34,7 +43,7 @@ if __name__ == "__main__":
 
     plt.ioff()
     # try: gen_metadata(ceph_dir/posix_from_win(r'X:\Dammy\ephys\session_topology.csv'),ceph_dir,ceph_dir/'Dammy'/'harpbins')
-    sess_topology_path = ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_ephys_2401.csv')
+    sess_topology_path = ceph_dir/posix_from_win(rf'X:\Dammy\Xdetection_mouse_hf_test\session_topology_{args.sess_top_tag}.csv')
     # try: gen_metadata(sess_topology_path,ceph_dir,
     #                   col_name='beh_bin',harp_bin_dir='')
     # except OSError: pass
@@ -61,8 +70,8 @@ if __name__ == "__main__":
     #     sorter_dirname = 'sorter_output'
     # else:
     sorter_dirname = args.sorter_dirname
-    sort_dirs = get_sorting_dirs(ephys_dir, f'{name}_{date_str}',dir1_name, dir2_name, sorter_dirname)
-    sort_dirs = [e for ei,e in enumerate(sort_dirs) if ei in all_sess_info.index]
+    # sort_dirs = get_sorting_dirs(ephys_dir, f'{name}_{date_str}',dir1_name, dir2_name, sorter_dirname)
+    # sort_dirs = [e for ei,e in enumerate(sort_dirs) if ei in all_sess_info.index]
 
     ephys_figdir = ceph_dir/'Dammy'/'figures'/f'sim_analysis_based_{dir1_name}_{dir2_name}'
     if args.synth_data:
@@ -73,33 +82,33 @@ if __name__ == "__main__":
 
     sessions = {}
     psth_window = [-2, 3]
-    main_sess = all_sess_info.query('sess_order=="main"')
-    main_sess_td_name = Path(main_sess['sound_bin'].iloc[0].replace('_SoundData', '_TrialData')).with_suffix('.csv').name
+    main_sess = session_topology.query('sess_order=="main" & name==@name & date==@date')
+    if 'tdata_file' in main_sess.columns:
+        main_sess_td_name = posix_from_win(main_sess['tdata_file'].iloc[0],ceph_linux_dir=config['home_dir_linux'])
+    else:
+        main_sess_td_name = Path(main_sess['sound_bin'].iloc[0].replace('_SoundData', '_TrialData')).with_suffix('.csv').name
     # get main sess pattern
     home_dir = Path(config[f'home_dir_{sys_os}'])
-    main_patterns = get_main_sess_patterns(name, date, main_sess_td_name, home_dir)
-    normal_patterns = [pattern for pattern in main_patterns if np.all(np.diff(pattern)>0)]
-    non_normal_patterns = [pattern for pattern in main_patterns if not np.all(np.diff(pattern)>0)]
-    # if non_normal_patterns:
-    #     main_patterns = list(sum(zip(normal_patterns,non_normal_patterns),()))
-    # else:
-    #     main_patterns = normal_patterns
-    n_patts_per_rule = int(len(main_patterns)/ len(normal_patterns))
+    try:
+        main_patterns = get_main_sess_patterns(name,date, main_sess_td_name=main_sess_td_name, home_dir=home_dir)
+    except FileNotFoundError:
+        main_patterns = [[0,0,0,0]]
 
     main_pattern = main_patterns[0]
     # sort_dirs =
 
-    plot_psth_decode = False
+    plot_psth_decode = True
     decode_over_time = False
 
     cond_filters = get_all_cond_filts()
+    print(f'{main_sess_td_name =}')
 
-    for (_,sess_info),spike_dir in zip(all_sess_info.iterrows(), sort_dirs):
-        if sess_info['sess_order'] != 'main':
-            continue
+    for (_,sess_info) in all_sess_info.iterrows():
+        # if sess_info['sess_order'] != 'main':
+        #     continue
         # if 'good_units' not in spike_dir.parent.name:
         #     pass
-
+        spike_dir = ceph_dir/posix_from_win(sess_info['ephys_dir'])/args.rel_sorting_path/args.sorter_dirname
         recording_dir = next((ceph_dir/posix_from_win(sess_info['ephys_dir'],config['ceph_dir_linux'])).rglob('continuous')).parent
         # print((ceph_dir/posix_from_win(sess_info['ephys_dir'])))
         print(f'analysing {recording_dir.name}')
@@ -114,7 +123,7 @@ if __name__ == "__main__":
         sessname = sessname.replace('_SoundData','')
 
         sess_pkl_path = pkl_dir / f'{sessname}.pkl'
-
+        print(f'looking for {sess_pkl_path}')
         if sess_pkl_path.is_file() and not args.ow:
             print(f'found {sess_pkl_path.name}, loading')
             sessions[sessname] = load_sess_pkl(sess_pkl_path)
@@ -128,46 +137,53 @@ if __name__ == "__main__":
         sound_bin_path = Path(sess_info['sound_bin'])
         beh_bin_path = Path(sess_info['beh_bin'])
 
-        if sess_info['sess_order'] == 'main':  # load trial_data
+        # if sess_info['sess_order'] == 'main':  # load trial_data
 
-            sessions[sessname].load_trial_data(get_main_sess_td_df(name,date,main_sess_td_name,home_dir)[1])
-            # normal = sessions[sessname].td_df[sessions[sessname].td_df['Tone_Position'] == 0]['PatternID'].iloc[0]
 
-            if sessions[sessname].td_df['Stage'].iloc[0] <=2:
-                print('stage 2, nothing to analyse')
-                continue
-            main_patterns = get_main_sess_patterns(td_df=sessions[sessname].td_df)
-            main_patterns = sorted(main_patterns, key=lambda x: (x[0], np.any(np.diff(x)<=0)))
-            print(f'{main_patterns=}')
-            if sessions[sessname].td_df['Stage'].iloc[0] ==3:
-                normal_patterns = main_patterns
-                if len(normal_patterns) > 1 and sessions[sessname].td_df['Stage'].iloc[0] == 3:
-                    warnings.warn(f'{sessname} has more than one normal pattern for stage 3')
-            elif sessions[sessname].td_df['Stage'].iloc[0] == 4:
-                normal_patterns = get_main_sess_patterns(
-                    td_df=sessions[sessname].td_df.query(cond_filters['normal_exp']))
-            elif sessions[sessname].td_df['Stage'].iloc[0] == 5:
-                normal_patterns = [pattern for pattern in main_patterns if np.all(np.diff(pattern) > 0)]
-            else:
-                continue
+        sessions[sessname].load_trial_data(get_main_sess_td_df(name,date,main_sess_td_name,home_dir)[1])
+        # normal = sessions[sessname].td_df[sessions[sessname].td_df['Tone_Position'] == 0]['PatternID'].iloc[0]
 
-            normal = main_pattern
-            # normal = [int(pip) for pip in normal.split(';')]
-            if -1 in sessions[sessname].td_df['Pattern_Type'].unique():
-                new_normal = sessions[sessname].td_df[sessions[sessname].td_df['Pattern_Type'] == -1]['PatternID'].iloc[0]
-                # new_normal = [int(pip) for pip in new_normal.split(';')]
-            else:
-                new_normal = None
-
+        if sessions[sessname].td_df['Stage'].iloc[0] <=2 and sess_info['sess_order'] == 'main':
+            print('stage 2, nothing to analyse')
+            continue
+        main_patterns = get_main_sess_patterns(td_df=sessions[sessname].td_df)
+        main_patterns = sorted(main_patterns, key=lambda x: (x[0], np.any(np.diff(x)<=0)))
+        print(f'{main_patterns=}')
+        patts_by_rule = get_patts_by_rule(main_patterns)
+        n_patts_per_rule = max(len(e) for e in patts_by_rule.values())
+        print(f'{main_patterns=}')
+        if sessions[sessname].td_df['Stage'].iloc[0] ==3:
+            normal_patterns = main_patterns
+            if len(normal_patterns) > 1 and sessions[sessname].td_df['Stage'].iloc[0] == 3:
+                warnings.warn(f'{sessname} has more than one normal pattern for stage 3')
+        elif sessions[sessname].td_df['Stage'].iloc[0] == 4:
+            normal_patterns = get_main_sess_patterns(
+                td_df=sessions[sessname].td_df.query(cond_filters['normal_exp']))
+        elif sessions[sessname].td_df['Stage'].iloc[0] == 5:
+            normal_patterns = [e for i, e in enumerate(main_patterns) if i % 2 == 0] # write function for getting rule (sub start ad cnt unique)
         else:
-            # normal = [int(pip) for pip in main_pattern.split(';')]
-            normal= main_pattern
+            normal_patterns = main_patterns
+
+        normal = main_pattern
+        # normal = [int(pip) for pip in normal.split(';')]
+        if -1 in sessions[sessname].td_df['Pattern_Type'].unique():
+            new_normal = sessions[sessname].td_df[sessions[sessname].td_df['Pattern_Type'] == -1]['PatternID'].iloc[0]
+            # new_normal = [int(pip) for pip in new_normal.split(';')]
+        else:
             new_normal = None
-        sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir)
+
+        # else:
+        #     # normal = [int(pip) for pip in main_pattern.split(';')]
+        #     normal= main_pattern
+        #     new_normal = None
+        beh_write_data_path = beh_bin_path.with_stem(f'{beh_bin_path.stem}_write_data').with_suffix('.csv')
+        beh_write_data_path = ceph_dir / posix_from_win(str(beh_write_data_path))
+
+        sessions[sessname].init_spike_obj(spike_times_path, spike_cluster_path, start_time, parent_dir=spike_dir,
+                                          beh_write_data_path=beh_write_data_path,rec_dir=recording_dir)
         if not sessions[sessname].sound_event_dict or args.ow:
             _parts = sessname.split('_')
             '_'.join([_parts[0],'SoundData',_parts[1]])
-            labels = ['A-0', 'B-0', 'C-0', 'D-0', 'X', 'base','newA']
 
             abs_writes_path = str(sound_bin_path.with_stem(f'{sound_bin_path.stem}_write_indices'))
             sessions[sessname].init_sound_event_dict(ceph_dir/posix_from_win(abs_writes_path).with_suffix('.csv'),
@@ -179,17 +195,18 @@ if __name__ == "__main__":
             sessions[sessname].spike_obj.unit_means = (np.zeros(n_units), np.ones(n_units))
 
         pip_idxs = {event_lbl: sessions[sessname].sound_event_dict[event_lbl].idx
-                    for event_lbl in sessions[sessname].sound_event_dict
+                    for event_lbl in sessions[sessname].sound_event_dict 
                     if any(char in event_lbl for char in 'ABCD')}
-        pip_desc, pip_lbls, pip_names = get_pip_info(sessions[sessname].sound_event_dict, main_patterns,
+        pip_desc, pip_lbls, pip_names = get_pip_info(sessions[sessname].sound_event_dict,
+                                                     main_patterns if sess_info['sess_order'] == 'main' else list(pip_idxs.values()),
                                                      n_patts_per_rule)
         sessions[sessname].pip_desc = pip_desc
         # generate patterned unit rates
-        sessions[sessname].get_grouped_rates_by_property(pip_desc,'ptype',0.1)
-        sessions[sessname].get_sound_psth(psth_window=psth_window, zscore_flag=True, baseline_dur=0, redo_psth=False,
+        # sessions[sessname].get_grouped_rates_by_property(pip_desc,'ptype',0.1)
+        sessions[sessname].get_sound_psth(psth_window=psth_window, zscore_flag=False, baseline_dur=0, redo_psth=False,
                                           use_iti_zscore=False, synth_data=synth_data_flag)
         sessions[sessname].pickle_obj(pkl_dir)
-        exit()
+        # exit()
 
         n_shuffles = 1000
         by_pip_predictors = {}
@@ -217,7 +234,7 @@ if __name__ == "__main__":
         self_sims_plot[1].set_ylabel('Self similarity', fontsize=18)
         self_sims_plot[0].set_layout_engine('tight')
         self_sims_plot[0].show()
-        self_sims_plot[0].savefig(ephys_figdir / f'pip_self_sim_{sessname}.svg')
+        self_sims_plot[0].savefig(ephys_figdir / f'pip_self_sim_{sessname}.pdf')
 
         # event_psth_dict = {e: by_pip_predictors[e] for e in sum(list([e.valuesby_pip_predictors.values()]), [])}
         event_psth_dict = {k:v for e_key in by_pip_predictors for (k, v) in by_pip_predictors[e_key].items()}
@@ -235,7 +252,7 @@ if __name__ == "__main__":
             compared_pips_plot[1][pi].set_ylim([0, 1])
             compared_pips_plot[1][pi].set_ylabel('cosine similarity')
         compared_pips_plot[0].show()
-        compared_pips_plot[0].savefig(ephys_figdir/f'pips_compared_{sessname}.svg')
+        compared_pips_plot[0].savefig(ephys_figdir/f'pips_compared_{sessname}.pdf')
 
         # save_session psth
         if plot_psth_decode:
@@ -267,7 +284,7 @@ if __name__ == "__main__":
             psth_ts_plot[1].set_yticklabels(psth_ts_plot[1].get_yticklabels())
             psth_ts_plot[0].set_size_inches(6.4,1)
             psth_ts_plot[1].axvline(0,c='k',ls='--')
-            psth_ts_plot[0].savefig(ephys_figdir/f'A_psth_ts_{sessname}.svg')
+            psth_ts_plot[0].savefig(ephys_figdir/f'A_psth_ts_{sessname}.pdf')
 
             plot_2d_array_with_subplots(sessions[sessname].sound_event_dict['D-0'].psth[1].loc[sessions[sessname].sound_event_dict['A-0'].psth[2]])
             sessions[sessname].save_psth(figdir=ephys_figdir)
@@ -293,7 +310,7 @@ if __name__ == "__main__":
                     psth_XA_plot[1][ei].tick_params(axis='both', which='major', labelsize=18)
                     psth_XA_plot[1][ei].locator_params(axis='both', nbins=3)
                 psth_XA_plot[0].tight_layout(pad=0)
-                # psth_XA_plot[0].show()
+                psth_XA_plot[0].show()
 
             if sess_info['sess_order'] != 'main':
                 psth_ABCD_plot = plt.subplots(ncols=4,figsize=(9,3.5),sharey='all')
@@ -327,7 +344,7 @@ if __name__ == "__main__":
                 sessions[sessname].run_decoder('X_to_base', ['data','shuffle'], dec_kwargs={'cv_folds': 0},
                                                plot_flag=True,)
                 # sessions[sessname].decoders['X_to_base'].accuracy_plot[0].show()
-                sessions[sessname].decoders['X_to_base'].accuracy_plot[0].savefig(ephys_figdir/f'X_to_base_{sessname}.svg')
+                sessions[sessname].decoders['X_to_base'].accuracy_plot[0].savefig(ephys_figdir/f'X_to_base_{sessname}.pdf')
             # decoder to base
             dec_kwargs = {'cv_folds': 10}
             for pip in ['A-0','B-0','C-0','D-0']:
@@ -339,7 +356,7 @@ if __name__ == "__main__":
                 sessions[sessname].init_decoder(f'{pip}_to_base', np.vstack(preds_all_vs_all), np.hstack(feats_all_vs_all))
                 sessions[sessname].run_decoder(f'{pip}_to_base', ['data','shuffle'], dec_kwargs={'cv_folds':0})
                 # sessions[sessname].decoders[f'{pip}_to_base'].accuracy_plot[0].set_constrained_layout('constrained')
-                # sessions[sessname].decoders[f'{pip}_to_base'].accuracy_plot[0].savefig(ceph_dir/'Dammy'/'figures'/'ephys'/f'{pip}_to_base_accr.svg',)
+                # sessions[sessname].decoders[f'{pip}_to_base'].accuracy_plot[0].savefig(ceph_dir/'Dammy'/'figures'/'ephys'/f'{pip}_to_base_accr.pdf',)
 
             tone2base_all_plot = plt.subplots()
             # for pi, pip in enumerate(['A-0','B-0','C-0','D-0']):
@@ -362,7 +379,7 @@ if __name__ == "__main__":
             tone2base_all_plot[1].get_legend().remove()
             # tone2base_all_plot[0].show()
             tone2base_all_plot[0].set_constrained_layout('constrained')
-            tone2base_all_plot[0].savefig(ephys_figdir/f'ABCD_to_base_perf_{sessname}.svg')
+            tone2base_all_plot[0].savefig(ephys_figdir/f'ABCD_to_base_perf_{sessname}.pdf')
 
             window = [0, 0.25]
             preds_sim_over_pips = [get_predictor_from_psth(sessions[sessname], key, psth_window, window, mean=None)
@@ -375,12 +392,12 @@ if __name__ == "__main__":
             [plot_similarity_mat(sim, ''*sim.shape[0], plot=(pip_sim_over_trials_plot[0],ax), cmap='Reds')
              for sim,ax in zip(pip_sim_over_trials,pip_sim_over_trials_plot[1])]
             pip_sim_over_trials_plot[0].set_layout_engine('compressed',w_pad=0.5)
-            pip_sim_over_trials_plot[0].savefig(ephys_figdir/f'pip_sim_over_trials_{sessname}.svg')
+            pip_sim_over_trials_plot[0].savefig(ephys_figdir/f'pip_sim_over_trials_{sessname}.pdf')
             mean_pip_sim = [np.mean(sim[~np.eye(sim.shape[0],dtype=bool)]) for sim in pip_sim_over_trials]
             pip_sim_over_pips = cosine_similarity([pred[:,:,-1].mean(axis=0) for pred in preds_sim_over_pips])
             # pip_sim_over_pips = cosine_similarity([pred.mean(axis=0).mean(axis=-1) for pred in _predictor_list])
             pip_sim_pip_plot = plot_similarity_mat(pip_sim_over_pips, np.arange(len(preds_sim_over_pips)), cmap='Reds')
-            pip_sim_pip_plot[0].savefig(ephys_figdir/f'pip_sim_over_pips_{sessname}.svg')
+            pip_sim_pip_plot[0].savefig(ephys_figdir/f'pip_sim_over_pips_{sessname}.pdf')
 
             # pearson_corr_all = np.zeros((len(_predictor_list),len(_predictor_list)))
             # for i,ii in enumerate(_predictor_list):
@@ -399,7 +416,7 @@ if __name__ == "__main__":
             # pearson_plot[1].set_ylabel('first half')
             # pearson_plot[2].ax.set_ylabel("Pearson's correlation",rotation=270,labelpad=12)
             # pearson_plot[0].show()
-            # pearson_plot[0].savefig(ephys_figdir/f'pearson_no_base_corr_matrix_{sessname}.svg',)
+            # pearson_plot[0].savefig(ephys_figdir/f'pearson_no_base_corr_matrix_{sessname}.pdf',)
 
             # run all decoder with base for tseries
             preds_all_vs_all = [get_predictor_from_psth(sessions[sessname], key, psth_window, window, mean=np.mean)
@@ -419,11 +436,11 @@ if __name__ == "__main__":
             sessions[sessname].decoders[all_dec_name].cm_plot[1].tick_params(axis='both', which='major', labelsize=16)
             # sessions[sessname].decoders['all_vs_all'].cm_plot[0].set_constrained_layout('constrained')
             sessions[sessname].decoders[all_dec_name].cm_plot[0].savefig(ephys_figdir/
-                                                                         f'ABCD_base_cm_{sessname}.svg')
+                                                                         f'ABCD_base_cm_{sessname}.pdf')
 
-            sessions[sessname].decoders[all_dec_name].plot_decoder_accuracy(all_dec_lbls, )
+            plot_funcs.plot_decoder_accuracy(all_dec_lbls, )
             sessions[sessname].decoders[all_dec_name].accuracy_plot[0].savefig(ephys_figdir/
-                                                                               f'all_vs_all_accuracy_{sessname}.svg')
+                                                                               f'all_vs_all_accuracy_{sessname}.pdf')
 
         home_dir = Path(config[f'home_dir_{sys_os}'])
         if sess_info['sess_order'] == 'main':
@@ -432,8 +449,8 @@ if __name__ == "__main__":
                 #                                    rf'H:\data\Dammy\{sessname.split("_")[0]}\TrialData')
                 idx_bool = sessions[sessname].td_df['local_rate'] <= 0.2
                 idx_bool2 = sessions[sessname].td_df['local_rate'] >= 0.8
-                recent_pattern_trials = sessions[sessname].td_df[idx_bool].index.to_numpy()
-                distant_pattern_trials = sessions[sessname].td_df[idx_bool2].index.to_numpy()
+                recent_pattern_trials = sessions[sessname].td_df[idx_bool].index.get_level_values('trial_num').to_numpy()
+                distant_pattern_trials = sessions[sessname].td_df[idx_bool2].index.get_level_values('trial_num').to_numpy()
 
                 # cumsum_plot = plt.subplots()
                 # cumsum_plot[1].plot(np.cumsum(idx_bool),label='freq')
@@ -442,7 +459,7 @@ if __name__ == "__main__":
                 # cumsum_plot[1].set_xlabel('trial number')
                 # cumsum_plot[1].set_title('distribution of rare vs freq trials over session')
                 # cumsum_plot[0].set_constrained_layout('constrained')
-                # cumsum_plot[0].savefig(ephys_figdir/f'02_08_local_rate_cumsum_plot_{sessname}.svg')
+                # cumsum_plot[0].savefig(ephys_figdir/f'02_08_local_rate_cumsum_plot_{sessname}.pdf')
 
                 rec_dist_decoder_plot = plt.subplots()
                 # dec_events = ['A-0','B-0','C-0','D-0','A_shuffle','A_halves']
@@ -451,8 +468,8 @@ if __name__ == "__main__":
                     pip_id = pip.split('_')[0]
 
                     preds_norm_dev = get_predictor_from_psth(sessions[sessname], pip_id, psth_window, [0, 1], mean=np.mean)
-                    recent_idx_bool = np.isin(sessions[sessname].sound_event_dict[pip_id].trial_nums-1,recent_pattern_trials)
-                    distant_idx_bool = np.isin(sessions[sessname].sound_event_dict[pip_id].trial_nums-1,distant_pattern_trials)
+                    recent_idx_bool = np.isin(sessions[sessname].sound_event_dict[pip_id].trial_nums,recent_pattern_trials)
+                    distant_idx_bool = np.isin(sessions[sessname].sound_event_dict[pip_id].trial_nums,distant_pattern_trials)
                     if 'badpred' in pip:
                         rec_dist_predictors = preds_norm_dev[recent_idx_bool[:len(preds_norm_dev)]], preds_norm_dev[recent_idx_bool[:len(preds_norm_dev)]]
                     elif 'halves' in pip:
@@ -463,7 +480,7 @@ if __name__ == "__main__":
                     rec_dist_features = [np.full(e.shape[0], ei) for ei, e in enumerate(rec_dist_predictors)]
 
                     plt_kwargs = {}
-                    dec_kwargs = {'cv_folds': 10}
+                    dec_kwargs = {'cv_folds': 5}
                     if 'shuffle' in pip:
                         # print('shuffle')
                         dec_kwargs['shuffle'] = True
@@ -492,7 +509,7 @@ if __name__ == "__main__":
                 rec_dist_decoder_plot[1].get_legend().remove()
                 rec_dist_decoder_plot[0].set_constrained_layout('constrained')
 
-                rec_dist_decoder_plot[0].savefig(ephys_figdir/f'02_vs_08_local_bin5_acc_{sessname}.svg')
+                rec_dist_decoder_plot[0].savefig(ephys_figdir/f'02_vs_08_local_bin5_acc_{sessname}.pdf')
 
                 # do as boxplot
                 rare_freq_boxplot = plt.subplots()
@@ -511,7 +528,7 @@ if __name__ == "__main__":
                 rare_freq_boxplot[1].tick_params(axis='both', which='major', labelsize=14)
                 # rare_freq_boxplot[0].set_constrained_layout('constrained')
                 rare_freq_boxplot[0].set_size_inches(3.5,2.4)
-                rare_freq_boxplot[0].savefig(ephys_figdir/f'rare_freq_decoding_boxplot_patt_window_{sessname}.svg')
+                rare_freq_boxplot[0].savefig(ephys_figdir/f'rare_freq_decoding_boxplot_patt_window_{sessname}.pdf')
                 rare_freq_boxplot[0].show()
 
                 # psth rare vs freq
@@ -525,7 +542,7 @@ if __name__ == "__main__":
                                               'mean difference in firing rate (rare-frequent)',c='k')
                 plot_ts_var(x_ser,(rare_A-freq_A),'k',rare_freq_psth[1])
 
-                rare_freq_psth[0].savefig(ephys_figdir/f'rare_vs_freq_psth_ts_{sessname}.svg')
+                rare_freq_psth[0].savefig(ephys_figdir/f'rare_vs_freq_psth_ts_{sessname}.pdf')
                 np.save(ceph_dir/'Dammy'/'ephys_pkls'/f'rare_vs_freq_array_{sessname}.npy',rare_A-freq_A)
 
                 # bootstrap data
@@ -534,47 +551,47 @@ if __name__ == "__main__":
                 #     pass
                 rare_freq_diff_plot = plot_psth((rare_A-freq_A),'Time from A',[-2,3],cmap='bwr',
                                                 cbar_label='zscored firing rate( rare - frequent)')
-                rare_freq_diff_plot[0].savefig(ephys_figdir/f'rare_vs_freq_psth_{sessname}.svg')
+                rare_freq_diff_plot[0].savefig(ephys_figdir/f'rare_vs_freq_psth_{sessname}.pdf')
 
-                rare_freq_schem_plot = plt.subplots()
-                switches = sessions[sessname].td_df['PatternPresentation_Rate'][sessions[sessname].td_df['PatternPresentation_Rate'].diff() != 0]
-                for si,switch in enumerate(switches):
-                    if si==len(switches)-1:
-                        end = sessions[sessname].td_df.shape[0]
-                    else:
-                        end = switches.iloc[[si+1]].index[0]
-                    rare_freq_schem_plot[1].axvspan(switches.iloc[[si]].index[0],end,fc=f'C{1 if switch==0.9 else 0}',
-                                                    alpha=0.3)
-                rare_freq_schem_plot[1].plot((1-sessions[sessname].td_df['local_rate']),c='k',)
-                rare_freq_schem_plot[1].tick_params(axis='both', which='major', labelsize=14)
-                rare_freq_schem_plot[0].show()
-                rare_freq_schem_plot[0].savefig(ephys_figdir/f'rate_switches_{sessname}.svg')
-
-                # trial by trial pearsonr
-                # pearson_corr_all = np.zeros((len(A_psth), len(A_psth)))
-                pearsonr_list = [np.array([pearsonr(aa.mean(axis=1),a.mean(axis=1))[0] for a in A_psth]) for aa in A_psth]
-                pearson_corr_all = np.vstack(pearsonr_list)
-
-                pearson_corr_sorted = np.vstack([pearson_corr_all[distant_idx_bool],pearson_corr_all[~distant_idx_bool]])
-                pearson_plot = plot_2d_array_with_subplots(pearson_corr_all, cbar_height=20,cmap='cividis',)
-                r2f_switch = ((sessions[sessname].td_df['Tone_Position']==0).cumsum()
-                                  [sessions[sessname].td_df.PatternPresentation_Rate.diff()<0])
-                f2r_switch = ((sessions[sessname].td_df['Tone_Position']==0).cumsum()
-                                  [sessions[sessname].td_df.PatternPresentation_Rate.diff()>0])
-                # pearson_plot[1].axvline(recent_idx_bool.sum(), c='k', ls='--')
-                # pearson_plot[1].axhline(recent_idx_bool.sum(), c='k', ls='--')
-                [pearson_plot[1].axvline(i,c='w',ls='--') for i in r2f_switch.values if i not in [0,1]]
-                [pearson_plot[1].axhline(i,c='lightcoral',ls='--') for i in f2r_switch.values if i not in [0,1]]
-
-                pearson_plot[1].invert_yaxis()
-                # pearson_plot[1].set_xticklabels(['','A-0','B-0','C-0','D-0',])
-                # pearson_plot[1].set_yticklabels(['','A-0','B-0','C-0','D-0'])
-                pearson_plot[2].ax.set_ylabel("Pearson's correlation", rotation=270, labelpad=12)
-                pearson_plot[1].tick_params(axis='both', which='major', labelsize=18)
-                pearson_plot[2].ax.tick_params(axis='y', which='major', labelsize=14)
-                pearson_plot[0].set_size_inches(3.5,3)
-                pearson_plot[0].show()
-                pearson_plot[0].savefig(ephys_figdir / f'pearson_tofirst_A_{sessname}.svg', )
+                # rare_freq_schem_plot = plt.subplots()
+                # switches = sessions[sessname].td_df['PatternPresentation_Rate'][sessions[sessname].td_df['PatternPresentation_Rate'].diff() != 0]
+                # for si,switch in enumerate(switches):
+                #     if si==len(switches)-1:
+                #         end = sessions[sessname].td_df.shape[0]
+                #     else:
+                #         end = switches.iloc[[si+1]].index.to_frame()['trial_num'][0]
+                #     rare_freq_schem_plot[1].axvspan(switches.iloc[[si]].index.to_frame()['trial_num'][0],end,fc=f'C{1 if switch==0.9 else 0}',
+                #                                     alpha=0.3)
+                # rare_freq_schem_plot[1].plot((1-sessions[sessname].td_df['local_rate']),c='k',)
+                # rare_freq_schem_plot[1].tick_params(axis='both', which='major', labelsize=14)
+                # rare_freq_schem_plot[0].show()
+                # rare_freq_schem_plot[0].savefig(ephys_figdir/f'rate_switches_{sessname}.pdf')
+                #
+                # # trial by trial pearsonr
+                # # pearson_corr_all = np.zeros((len(A_psth), len(A_psth)))
+                # pearsonr_list = [np.array([pearsonr(aa.mean(axis=1),a.mean(axis=1))[0] for a in A_psth]) for aa in A_psth]
+                # pearson_corr_all = np.vstack(pearsonr_list)
+                #
+                # pearson_corr_sorted = np.vstack([pearson_corr_all[distant_idx_bool],pearson_corr_all[~distant_idx_bool]])
+                # pearson_plot = plot_2d_array_with_subplots(pearson_corr_all, cbar_height=20,cmap='cividis',)
+                # r2f_switch = ((sessions[sessname].td_df['Tone_Position']==0).cumsum()
+                #                   [sessions[sessname].td_df.PatternPresentation_Rate.diff()<0])
+                # f2r_switch = ((sessions[sessname].td_df['Tone_Position']==0).cumsum()
+                #                   [sessions[sessname].td_df.PatternPresentation_Rate.diff()>0])
+                # # pearson_plot[1].axvline(recent_idx_bool.sum(), c='k', ls='--')
+                # # pearson_plot[1].axhline(recent_idx_bool.sum(), c='k', ls='--')
+                # [pearson_plot[1].axvline(i,c='w',ls='--') for i in r2f_switch.values if i not in [0,1]]
+                # [pearson_plot[1].axhline(i,c='lightcoral',ls='--') for i in f2r_switch.values if i not in [0,1]]
+                #
+                # pearson_plot[1].invert_yaxis()
+                # # pearson_plot[1].set_xticklabels(['','A-0','B-0','C-0','D-0',])
+                # # pearson_plot[1].set_yticklabels(['','A-0','B-0','C-0','D-0'])
+                # pearson_plot[2].ax.set_ylabel("Pearson's correlation", rotation=270, labelpad=12)
+                # pearson_plot[1].tick_params(axis='both', which='major', labelsize=18)
+                # pearson_plot[2].ax.tick_params(axis='y', which='major', labelsize=14)
+                # pearson_plot[0].set_size_inches(3.5,3)
+                # pearson_plot[0].show()
+                # pearson_plot[0].savefig(ephys_figdir / f'pearson_tofirst_A_{sessname}.pdf', )
 
         if sess_info['sess_order'] == 'main' and 4 in sessions[sessname].td_df['Stage'].values:
             new_window = [-1, 2]
@@ -617,7 +634,7 @@ if __name__ == "__main__":
             psth_ts_plot[1].locator_params(axis='both', nbins=4)
             psth_ts_plot[0].set_size_inches(3.5,3)
             psth_ts_plot[0].show()
-            psth_ts_plot[0].savefig(ephys_figdir/f'norm_dev_psth_ts_{sessname}.svg')
+            psth_ts_plot[0].savefig(ephys_figdir/f'norm_dev_psth_ts_{sessname}.pdf')
 
             for dev_type in pred_names[1:]:
                 response_diff_mat = predictors_dict[dev_type].mean(axis=0)-predictors_dict['normal'][-20:].mean(axis=0)
@@ -627,7 +644,7 @@ if __name__ == "__main__":
                 norm_dev_diff_mat[1].axvline(0.5,c='k',ls='--')
                 norm_dev_diff_mat[1].set_title(f'{dev_type} - {pred_names[0]}')
                 norm_dev_diff_mat[0].show()
-                norm_dev_diff_mat[0].savefig(ephys_figdir/f'norm_dev_diff_mat_{sessname}_{dev_type}.svg')
+                norm_dev_diff_mat[0].savefig(ephys_figdir/f'norm_dev_diff_mat_{sessname}_{dev_type}.pdf')
 
             response_diff_mat = predictors_dict['dev_ABBA1'].mean(axis=0) - predictors_dict['deviant'].mean(
                 axis=0)
@@ -637,7 +654,7 @@ if __name__ == "__main__":
             norm_dev_diff_mat[1].axvline(0.5, c='k', ls='--')
             norm_dev_diff_mat[1].set_title(f'dev_ABBA1 - deviant')
             norm_dev_diff_mat[0].show()
-            norm_dev_diff_mat[0].savefig(ephys_figdir / f'norm_dev_diff_mat_{sessname}_dev_ABBA1_deviant.svg')
+            norm_dev_diff_mat[0].savefig(ephys_figdir / f'norm_dev_diff_mat_{sessname}_dev_ABBA1_deviant.pdf')
 
                 # all_dev_plot = plt.subplots(4,5,figsize=(30,20))
                 # for i, (trial_response,ax) in enumerate(zip(predictors_dict[dev_type],all_dev_plot[1].flatten())):
@@ -670,7 +687,7 @@ if __name__ == "__main__":
                 similarity_plot[1].set_title(f'{sessname} {grouping_name}')
                 similarity_plot[0].set_size_inches(15, 13)
                 similarity_plot[0].show()
-                similarity_plot[0].savefig(ephys_figdir/f'pip_similarity_{sessname}_{grouping_name}.svg')
+                similarity_plot[0].savefig(ephys_figdir/f'pip_similarity_{sessname}_{grouping_name}.pdf')
 
             pearson_sim = [[pearsonr(ii[:,:,t4sim].mean(axis=0),jj[:,:,t4sim].mean(axis=0))[0]
                             for jj in preds_pips4sim.values()]
@@ -688,7 +705,7 @@ if __name__ == "__main__":
                 sim_comp_plot[0].set_size_inches(15, 12*2)
                 sim_comp_plot[0].suptitle(f'{sessname} {grouping_name}')
                 sim_comp_plot[0].show()
-                sim_comp_plot[0].savefig(ephys_figdir/f'pip_sim_pearson_vs_cosine_{sessname}_{grouping_name}.svg')
+                sim_comp_plot[0].savefig(ephys_figdir/f'pip_sim_pearson_vs_cosine_{sessname}_{grouping_name}.pdf')
 
 
             sort_keys = ['name','group',]
@@ -713,7 +730,7 @@ if __name__ == "__main__":
             # sim_over_time_tsplot[0].suptitle(f'Similarity to {comp_pip} over time',y=0.9)
             # sim_over_time_tsplot[0].set_size_inches(9, 18)
             # sim_over_time_tsplot[0].show()
-            # sim_over_time_tsplot[0].savefig(ephys_figdir/f'pip_similarity_over_time_{sessname}.svg')
+            # sim_over_time_tsplot[0].savefig(ephys_figdir/f'pip_similarity_over_time_{sessname}.pdf')
 
             # time series of similarity
             # pip_positions = [1]
@@ -735,7 +752,7 @@ if __name__ == "__main__":
                 sim_by_property_plot[1][p].set_title(f'Pip {p+1}')
 
             sim_by_property_plot[0].show()
-            sim_by_property_plot[0].savefig(ephys_figdir/f'pip_similarity_by_property_{sessname}.svg')
+            sim_by_property_plot[0].savefig(ephys_figdir/f'pip_similarity_by_property_{sessname}.pdf')
 
             # similarity for indv pips
 
@@ -780,7 +797,7 @@ if __name__ == "__main__":
             sim_figdir = ephys_figdir.with_stem(f'{ephys_figdir.stem}_by_pip_sim_plots')
             if not sim_figdir.is_dir():
                 sim_figdir.mkdir()
-            pip_by_pip_sim_plot[0].savefig( sim_figdir/ f'by_pip_similarity_{sessname}{"_permute" if permute else ""}_reordered.svg')
+            pip_by_pip_sim_plot[0].savefig( sim_figdir/ f'by_pip_similarity_{sessname}{"_permute" if permute else ""}_reordered.pdf')
 
             # regression model of similarity
             event_responses = preds_pips4sim
@@ -821,7 +838,7 @@ if __name__ == "__main__":
             glm_pval_plot[1].set_ylabel('pval')
             glm_pval_plot[1].legend(loc='lower right',ncols=len(pvals_by_units.columns))
             glm_pval_plot[0].show()
-            glm_pval_plot[0].savefig(ephys_figdir/ f'glm_pvals_{sessname}.svg')
+            glm_pval_plot[0].savefig(ephys_figdir/ f'glm_pvals_{sessname}.pdf')
 
             sig_regr_by_type = {regr:(pvals_by_units.query(f'{regr} < {sig_thresh}').index)
                                 for regr in pvals_by_units}
@@ -841,7 +858,7 @@ if __name__ == "__main__":
                 similarity_sig_units_plot[1].set_title(f'{sessname} {grouping_name}')
                 similarity_sig_units_plot[0].set_size_inches(15, 13)
                 similarity_sig_units_plot[0].show()
-                similarity_sig_units_plot[0].savefig(ephys_figdir/f'pip_similarity_sig_units_only_{sessname}_{grouping_name}.svg')
+                similarity_sig_units_plot[0].savefig(ephys_figdir/f'pip_similarity_sig_units_only_{sessname}_{grouping_name}.pdf')
 
             # regress out regressor
             regr2remove = 'position'
@@ -870,7 +887,7 @@ if __name__ == "__main__":
                 similarity_regressed_plot[0].set_size_inches(15, 13)
                 similarity_regressed_plot[0].show()
 
-                similarity_regressed_plot[0].savefig(ephys_figdir/f'pip_similarity_regressed_{sessname}_{grouping_name}.svg')
+                similarity_regressed_plot[0].savefig(ephys_figdir/f'pip_similarity_regressed_{sessname}_{grouping_name}.pdf')
             # plot by pip for ptype
             pip_by_pip_sim_plot = plt.subplots(1,ncols=len('ABCD'),squeeze=False)
             for permute, plots in zip([False],pip_by_pip_sim_plot[1]):
@@ -879,7 +896,7 @@ if __name__ == "__main__":
 
             pip_by_pip_sim_plot[0].set_size_inches(20,5*pip_by_pip_sim_plot[1].shape[0])
             pip_by_pip_sim_plot[0].show()
-            pip_by_pip_sim_plot[0].savefig(ephys_figdir/f'pip_similarity_by_pip_regressed_{sessname}.svg')
+            pip_by_pip_sim_plot[0].savefig(ephys_figdir/f'pip_similarity_by_pip_regressed_{sessname}.pdf')
 
             # synth based on copies
             # plot psth by group
@@ -914,7 +931,7 @@ if __name__ == "__main__":
                 grouped_psths_plot[0].set_size_inches(5*len(grouped_psths_plot[1]), 5)
                 grouped_psths_plot[0].set_layout_engine('tight')
                 # grouped_psths_plot[0].show()
-                grouped_psths_plot[0].savefig(ephys_figdir/f'grouped_psths_{sessname}_{grouping}.svg')
+                grouped_psths_plot[0].savefig(ephys_figdir/f'grouped_psths_{sessname}_{grouping}.pdf')
 
                 # group_psth_ts_plot[1].set_title(f'{sessname} {grouping}')
                 # group_psth_ts_plot[1].set_xlabel('time')
@@ -923,7 +940,7 @@ if __name__ == "__main__":
                 group_psth_ts_plot[0].set_size_inches(6*len('ABCD'), 5)
                 group_psth_ts_plot[0].set_layout_engine('tight')
                 group_psth_ts_plot[0].show()
-                group_psth_ts_plot[0].savefig(ephys_figdir/f'group_psth_ts_{sessname}_{grouping}.svg')
+                group_psth_ts_plot[0].savefig(ephys_figdir/f'group_psth_ts_{sessname}_{grouping}.pdf')
 
 
         # decoding accuracy over time
@@ -964,7 +981,7 @@ if __name__ == "__main__":
             prediction_ts_plot[0].set_constrained_layout('constrained')
             prediction_ts_plot[0].set_size_inches(4,3.5)
             prediction_ts_plot[0].show()
-            prediction_ts_plot[0].savefig(ephys_figdir/f'decoding_acc_ts_no_base_{sessname}.svg')
+            prediction_ts_plot[0].savefig(ephys_figdir/f'decoding_acc_ts_no_base_{sessname}.pdf')
 
         # pred_to_peak_plot = plt.subplots()
         # for li,lbl in enumerate(['A-0:,'B-0','C-0','D-0
@@ -1010,7 +1027,7 @@ if __name__ == "__main__":
                     [cross_sess_preds_tsplot[1].axvspan(t, t + 0.15, fc='k', alpha=0.1) for t in np.arange(0, 1, .25)
                      if all_sess_info.iloc[si]['sess_order'] == 'main']
 
-                    cross_sess_preds_tsplot[0].savefig(ephys_figdir/f'cross_sess_preds_{sess_decoder2use}_on_{sessname}_for_{pip}.svg')
+                    cross_sess_preds_tsplot[0].savefig(ephys_figdir/f'cross_sess_preds_{sess_decoder2use}_on_{sessname}_for_{pip}.pdf')
 
 
 

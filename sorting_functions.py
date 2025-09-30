@@ -1,8 +1,10 @@
+import shutil
+
 import spikeinterface.full as si
 from spikeinterface.preprocessing.motion import motion_options_preset
 from spikeinterface.sortingcomponents.peak_detection import detect_peaks
 from spikeinterface.sortingcomponents.peak_localization import localize_peaks
-from ephys_analysis_funcs import posix_from_win
+from io_utils import posix_from_win
 import probeinterface as pi
 import warnings
 import yaml
@@ -27,11 +29,11 @@ warnings.simplefilter("ignore")
 
 
 def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_flag=True,sorter_dir_suffix='',
-                   extra_folders=None, recording_dir_suffix=''):
+                   extra_folders=None, recording_dir_suffix='', **kwargs):
 
     dirs2sort = [base_dir]
     preprocessed_recs = []
-    job_kwargs = dict(n_jobs=os.cpu_count(), chunk_duration="1s", progress_bar=True)
+    job_kwargs = dict(n_jobs=32, chunk_duration="1s", progress_bar=True)
 
     if extra_folders:
         dirs2sort = dirs2sort+extra_folders
@@ -54,31 +56,36 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
             raw_files = []
 
         preprocessed_rec = None
-        if raw_files and not ow_flag:
+        if raw_files and not kwargs.get('ow_flag_preprocessing',ow_flag):
         # if raw_files:
             try:
                 logger.debug('reading preprocessed dir')
                 preprocessed_rec = si.load_extractor(preprocessed_dir)
                 logger.debug('read  preprocessed folder')
             except FileNotFoundError: pass
+            except ValueError: pass
 
         if not preprocessed_rec:
             logger.debug('reading openephys dir')
-            full_raw_rec = si.read_openephys(base_dir, block_index=index)
+            full_raw_rec = si.read_openephys(base_dir, block_index=index,stream_id='0')
             logger.debug('read openephys dir')
             probes = gen_probe_group(probe_name)
             full_raw_rec = full_raw_rec.set_probegroup(probes)
-            split_recording_dict = full_raw_rec.split_by("group")
+            shank_ids = full_raw_rec.get_probegroup().to_dataframe()['shank_ids'].values
+            full_raw_rec.set_property("shank_id", shank_ids)
+            split_recording_dict = full_raw_rec.split_by("shank_id")
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 preprocessed_rec_by_group = [preprocess(rec,rec_dir=rec_dir) for rec in split_recording_dict.values()]
             ids = np.hstack([rec._main_ids for rec in preprocessed_rec_by_group])
             preprocessed_rec = si.aggregate_channels(preprocessed_rec_by_group,ids)
             logger.debug('read and processed openephys folder')
-            preprocessed_rec.save(folder=rec_dir/'preprocessed', **job_kwargs, overwrite=True,verbose=False)
+            preprocessed_rec.save(folder=rec_dir/'preprocessed', **job_kwargs, overwrite=True,verbose=False,
+                                  format='binary',export_probe=True, probe_name='probe.prb',dtype=np.int16)
 
         preprocessed_recs.append(preprocessed_rec)
         # plot_rec_overview(preprocessed_rec,rec_dir)
+    pi.write_prb(preprocessed_dir / 'probe.prb', preprocessed_rec.get_probegroup())
 
     if len(preprocessed_recs) > 1:
         # raise Warning('multisession not supported yet')
@@ -100,7 +107,8 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         preprocessed_recs = [recording.channel_slice(common_channels) for recording in preprocessed_recs]
         all_recordings = si.concatenate_recordings(preprocessed_recs)
         if not list(pre_rec_dir.glob('si_folder.json')):
-            all_recordings.save(folder=pre_rec_dir, **job_kwargs, overwrite=True, verbose=False)
+            all_recordings.save(folder=pre_rec_dir, **job_kwargs, overwrite=True, verbose=False,
+                                export_probe=True, probe_name='probe.prb')
         # all_recordings.save(folder=rec_dir/, **job_kwargs, overwrite=True)
         all_recordings = si.load_extractor(pre_rec_dir)
         pd.DataFrame(segment_info,columns=['n_frames','duration']).to_csv(rec_dir/'preprocessed'/'segment_info.csv',
@@ -111,36 +119,88 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         rec_dir = dirs2sort[0] / f'sorting{recording_dir_suffix}'
 
 
-    # aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=recording_cmr,
-    #                                               grouping_property='group',
-    #                                               working_folder=rec_dir / sorter,
-    #                                               singularity_image=container_flag,
-    #                                               remove_existing_folder=True,verbose=True)
-    # sorting_kwargs = dict(do_correction=False,n_jobs=os.cpu_count()-1, minFR=0.1,delete_tmp_files=False)
-    drift_corr_flag = False if 'no_ks_drift' in sorter_dir_suffix else True
-    sorting_kwargs = dict(do_correction=drift_corr_flag)
-    if (rec_dir / f"{sorter}{sorter_dir_suffix}").is_dir() and not ow_flag:
-        logger.debug(f'{rec_dir / f"{sorter}{sorter_dir_suffix}"} already exists, checking if it is empty')
 
-        return
-    if sorter in ['spykingcircus2']:
-        container_flag=False
+    drift_corr_flag = False if 'no_ks_drift' in sorter_dir_suffix else True
+
+    if (rec_dir / f"{sorter}{sorter_dir_suffix}").is_dir() and not ow_flag:
+        try:
+            si.load_extractor((rec_dir / f"{sorter}{sorter_dir_suffix}"))
+            logger.debug(f'{rec_dir / f"{sorter}{sorter_dir_suffix}"} already exists, checking if it is empty')
+            return
+        except:
+            pass
+
+    if sorter in ['mountainsort5',]:
+        sorting_kwargs = {'whiten': True,
+                          'filter': False}
+    elif sorter == 'tridesclous2':
+        sorting_kwargs = {'apply_preprocessing':True}
+    else:
         sorting_kwargs = {}
+    if 'kilosort' in sorter:
+        sorting_kwargs = dict(do_correction=drift_corr_flag,nblocks=0)  # dmin=12.5, dminx=22.5
+        container_flag = container_flag
+        detect_threshold = 3  # Whitened Threshold (STD from Absolute traces)
+
+        sorting_kwargs = {
+            # Use default thresholds first as recommended, change only if necessary
+            # 'Th_universal': 9,
+            # 'Th_learned': 8,
+            # 'Th_single_ch': detect_threshold,
+
+            # Basic recording parameters
+            # 'nt': nt,  # Keep your existing time window
+            # 'nt0min': snippet_T1,  # Keep your existing alignment point
+
+            # For 16 channels, use 2-4x channels (32-64) rounded to multiple of 32, lower runs faster
+            # 'nearest_templates': 32,  #
+
+            # Don't modify spatial parameters unnecessarily
+            # 'dminx': 22.5,  #
+            # 'dmin': 12.5,  # Let it use defaults
+            # 'max_channel_distance': None,  # Remove - no maximum in space needed
+
+            # Keep default template parameters
+            # 'min_template_size': 10,  # Use default
+            # 'nearest_chans': 1,  # Use default
+            # 'x_centers': 1,  # Use default
+
+            # Processing settings
+            # 'do_CAR': False,  # Common average reference
+            'do_correction': drift_corr_flag,  # Keep drift correction off since MEA plate (diff for neuropixel)
+            'skip_kilosort_preprocessing': False,  # Since you do your own
+            'nblocks': 0,  # Keep default
+
+            # GPU settings
+            # 'save_extra_vars': True  # Save debug info
+        }
     logger.debug('Launching sorter')
-    if sorter == 'spykingcircus2':
+    if (rec_dir / f'{sorter}{sorter_dir_suffix}').is_dir() and ow_flag:
+        shutil.rmtree(rec_dir / f'{sorter}{sorter_dir_suffix}')
+    if sorter == 'spykingcircus2' and False:
         aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=all_recordings,
-                                                      grouping_property='group',
+                                                      grouping_property='by_shank',
                                                       working_folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
                                                       verbose=True, **sorting_kwargs
                                                       )
-    else:
-        logger.debug(f'kilosort outdir = {rec_dir / f"{sorter}{sorter_dir_suffix}"}')
+    elif sorter == 'mountainsort5':
         aggregate_sorting = si.run_sorter(sorter_name=sorter, recording=all_recordings,
-                                          output_folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
-                                          singularity_image=container_flag, delete_container_files=True,
-                                          remove_existing_folder=True,verbose=True,
-                                          extra_requirements=['numcodecs==0.15.1'],**sorting_kwargs
-                                          )
+                                           folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
+                                           remove_existing_folder=True,
+                                           verbose=True, **sorting_kwargs
+                                           )
+    else:
+        logger.debug(f'{sorter} outdir = {rec_dir / f"{sorter}{sorter_dir_suffix}"}')
+        aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=all_recordings,
+                                                      folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
+                                                      grouping_property='shank_id',
+                                                      singularity_image=container_flag,
+                                                      delete_container_files=False,
+                                                      delete_output_folder=False,
+                                                      remove_existing_folder=True,verbose=True,
+                                                      # extra_requirements=['kilosort==4.0.18'] if (container_flag and 'kilosort' in sorter) else None,
+                                                      **sorting_kwargs
+                                                      )
         # aggregate_sorting = si.run_sorter_by_property(sorter_name=sorter, recording=all_recordings,
         #                                               grouping_property='group',
         #                                               working_folder=rec_dir / f'{sorter}{sorter_dir_suffix}',
@@ -148,6 +208,7 @@ def sort_recording(base_dir,sorter, probe_name,index=0, ow_flag=False,container_
         #                                               remove_existing_folder=True,verbose=True, **sorting_kwargs
         #                                               )
     aggregate_sorting.save(folder=rec_dir / f'{sorter}{sorter_dir_suffix}'/'si_output', overwrite=True,verbose=True)
+    # export to phy
 
     # if len(preprocessed_recs) > 1:
     #     # get date_str
@@ -166,41 +227,41 @@ def get_probe(probe_name):
     return probe1
 
 
-def preprocess(recording,filter_range=(300,9000),rec_dir=''):
-    # bad_channels_ids, _ = si.detect_bad_channels(recording)
-    # recording = recording.remove_channels(bad_channels_ids)
+def preprocess(recording,filter_range=(300,6000),rec_dir=''):
+    bad_channel_ids, channel_labels = si.detect_bad_channels(recording, seed=1)
+    recording = si.interpolate_bad_channels(recording=recording, bad_channel_ids=bad_channel_ids)
     recording = cmr_by_shank(recording,filter_range)
-    job_kwargs = dict(n_jobs=os.cpu_count(), chunk_duration='1s', progress_bar=True)
+    job_kwargs = dict(n_jobs=32, chunk_duration='1s', progress_bar=True)
     logger.debug(f'drift kwargs = {job_kwargs}')
     # recording, motion_info = correct_drift(recording,'nonrigid_fast_and_accurate',rec_dir,job_kwargs)
     # recording, motion_info = correct_drift(recording,'nonrigid_accurate',rec_dir,job_kwargs)
+    # set shank id property
+    shank_ids = recording.get_probegroup().to_dataframe()['shank_ids'].values
+    recording.set_property("shank_id", shank_ids)
+    # recording = si.whiten(recording, mode='local', radius_um=12.5 * 3, dtype="float32")
     return recording
 
 
 def cmr_by_shank(recording,filter_range=(300,9000)):
-    bad_channels_ids, _ = si.detect_bad_channels(recording)
-    logger.info(f'bad channels = {bad_channels_ids}, total={len(bad_channels_ids)}')
-    recording = recording.remove_channels(bad_channels_ids)
+    return recording
+    # bad_channels_ids, _ = si.detect_bad_channels(recording)
+    # logger.info(f'bad channels = {bad_channels_ids}, total={len(bad_channels_ids)}')
+    # recording = recording.remove_channels(bad_channels_ids)
     recording = si.bandpass_filter(recording, freq_min=filter_range[0], freq_max=filter_range[1])
 
     probe_df = recording.get_probe().to_dataframe(complete=True)
     main_ids = copy(recording._main_ids)
-    recording._main_ids = recording.ids_to_indices()
+    # recording._main_ids = recording.ids_to_indices(ids=None)
     # chan_letters = np.unique(
     #     [chan_id.split('_')[0] if len(chan_id.split('_')) > 1 else [''] for chan_id in recording._main_ids])
 
-    cmr_group_param = 'shank_ids'
-    cmr_groups_idx = [probe_df[probe_df[cmr_group_param] == i]['device_channel_indices'].astype(int).to_list()
-                      for i in probe_df[cmr_group_param].unique()]
-    # if chan_letters[0]:
-    #     cmr_groups = [[f'{chan_letters[0]}_CH{int(cid) + 1}' if int(
-    #         cid) < 64 else f'{chan_letters[1]}_CH{int((int(cid) + 1) / 2)}' for cid in group] for group in
-    #                   cmr_groups_idx]
-    # else:
-    #     cmr_groups = [[f'CH{int(cid) + 1}' for cid in group] for group in cmr_groups_idx]
+    # cmr_group_param = 'shank_ids'
+    # cmr_groups_idx = [probe_df[probe_df[cmr_group_param] == i]['device_channel_indices'].astype(int).to_list()
+    #                   for i in probe_df[cmr_group_param].unique()]
+
     # recording_cmr = si.common_reference(recording, reference='global', operator='median', groups=cmr_groups)
-    recording_cmr = si.common_reference(recording, reference='global', operator='median', groups=cmr_groups_idx)
-    recording_cmr._main_ids = main_ids
+    recording_cmr = si.common_reference(recording, reference='global', operator='median')
+    # recording_cmr._main_ids = main_ids
     return recording_cmr
 
 
@@ -226,8 +287,7 @@ def gen_probe_group(probe_name='ASSY-236-P-1'):
     probes = pi.ProbeGroup()
 
     if probe_name.endswith('.json'):
-        probe = pi.read_probeinterface(probe_name)
-        probes.add_probe(probe)
+        probes = pi.read_probeinterface(probe_name)
         return probes
 
     probe1 = pi.get_probe(manufacturer, probe_name)
@@ -291,7 +351,10 @@ if __name__ == "__main__":
     parser.add_argument('config_file')
     parser.add_argument('--datadir',default=None)
     parser.add_argument('--extra_datadirs',default='')
+    parser.add_argument('--ow_flag_preprocessing',default=0,type=int)
     parser.add_argument('--ow_flag',default=0,type=int)
+    parser.add_argument('--use_ceph',default=1,type=int)
+
     args = parser.parse_args()
     with open(args.config_file,'r') as file:
         config = yaml.safe_load(file)
@@ -321,8 +384,9 @@ if __name__ == "__main__":
 
     print(f'{args = }')
 
-    recording_dir = ceph_dir/posix_from_win(folder)
+    recording_dir = ceph_dir/posix_from_win(folder) if args.use_ceph else Path(folder)
     sorter_output = sort_recording(recording_dir,sorter_name,probe_name=config['probe_name'],
+                                   ow_flag_preprocessing=args.ow_flag_preprocessing,
                                    ow_flag=ow_flag,container_flag=container_flag,
                                    sorter_dir_suffix=config.get('sorter_dir_suffix', ''),index=block_idx,
-                                   extra_folders=extra_folders,recording_dir_suffix=rec_dir_suffix)
+                                   extra_folders=extra_folders,recording_dir_suffix=rec_dir_suffix,sys_os=sys_os)

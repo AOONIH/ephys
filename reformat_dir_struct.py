@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ephys_analysis_funcs import posix_from_win
+from io_utils import posix_from_win
 from argparse import ArgumentParser
 import yaml
 import platform
@@ -79,19 +79,26 @@ def copy_data_w_topology(sess_topology:pd.Series,projectdir,**kwargs):  # sessdi
 
 
 def match2ephys(sessdirs:list[Path],to_matchdirsss:list[list[Path]],datatype_lbls:list[str],skip_flag=False)->dict:
-    print(f'{to_matchdirsss,datatype_lbls=}')
+    # print(f'{to_matchdirsss,datatype_lbls=}')
     sess_dict = {}
     sess_order = []
     for to_matchdirs,datatype_lbl in zip(to_matchdirsss,datatype_lbls):
-        if len(to_matchdirs) == 0:
+        if len(to_matchdirs) == 0 or not to_matchdirs[0]:
             print(f'No matching dirs for {sessdirs = }')
             return dict()
-        if len (sessdirs) != len(to_matchdirs):
+        # check date is the same
+        # print([extract_date(e.stem) for e in to_matchdirs+sessdirs])
+        assert len(np.unique([extract_date(e.stem) for e in to_matchdirs+sessdirs])) == 1, f'multiple dates {[e.stem for e in to_matchdirs+sessdirs] =  },'
+        date= np.unique([extract_date(e.stem) for e in to_matchdirs+sessdirs])[0] 
+        # if not any([int(date) < 250529,int(date) >= 250604]):
+        if not all([int(date) > 250604,]):
+            continue
+
+        if len (sessdirs) != len(to_matchdirs) and datatype_lbl != 'tdata_file':
             if skip_flag:
                 print(f'Skipping {sessdirs = }')
                 continue
             print(f'Cant match dirs {sessdirs=} to {datatype_lbl}')
-            # print([f'file{ei} : {e.stat().st_size / 1e6} mb' for ei, e in enumerate(to_matchdirs)])
             print([f'file {e.stem} : {e.stat().st_size / 1e6} mb' if e.is_file() else
                    f'dir {e.stem} : {sum(f.stat().st_size for f in e.rglob("*")) / 1e6} mb'
                    for ei, e in enumerate(to_matchdirs)])
@@ -106,41 +113,64 @@ def match2ephys(sessdirs:list[Path],to_matchdirsss:list[list[Path]],datatype_lbl
                     print('invalid mapping, try again')
             print(f'{mapping = }')
             assert len(mapping)==2 and len(mapping[0])==len(mapping[1])
-            sessdirs = [sessdirs[e] for e in mapping[0]]
+            if datatype_lbl != 'tdata_file':
+                sessdirs = [sessdirs[e] for e in mapping[0]]
             if sess_dict.get('ephys_dir'):
-                assert sess_dict['ephys_dir'] == sessdirs, 'non matching sessdirs'
+                if datatype_lbl != 'tdata_file':
+                    assert sess_dict['ephys_dir'] == sessdirs, 'non matching sessdirs'
+                else:
+                    sess_dict['ephys_dir'] = sessdirs
             else:
                 sess_dict['ephys_dir'] = sessdirs
-            to_matchdirs = [to_matchdirs[e] for e in mapping[1]]
-            dtype_name = f'{datatype_lbl}' if 'bin' in datatype_lbl else f'{datatype_lbl}_dir'
-        sess_dict[f'{datatype_lbl}_dir' ] = to_matchdirs
+            if datatype_lbl == 'tdata_file':
+                pass
+            else:
+                to_matchdirs = [to_matchdirs[e] for e in mapping[1]]
+        dtype_name = f'{datatype_lbl}' if 'bin' in datatype_lbl or 'file' in datatype_lbl else f'{datatype_lbl}_dir'
+        sess_dict[dtype_name] = to_matchdirs
+            
         sess_dict['ephys_dir'] = sessdirs
-        if sess_dict.get('sess_order'):
-            continue
-        if len(sessdirs) == 1:
-            sess_order = ['main']
-        elif len(sessdirs) == 3:
-            sess_order = ['pre','main','post']
-        else:
-            # sess_order = []
-            while not sess_order:
-                _order = input(f'provide pre,post, or main order {sessdirs = }')
-                _order = _order.split(',')
-                print(f'{_order = }')
-                if all([e in ['pre','post','main'] for e in _order]) and len(_order) == len(sessdirs):
-                    # print('valid')
-                    sess_order = _order
-                else:
-                    print(f'bad input:{_order,sessdirs,to_matchdirs = }')
-                    print(f'{all([e in ["pre","post","main"] for e in _order]) = }')
-                    print(f'{len(_order)==len(sessdirs) = }')
-                    # print(f'{len(sessdirs) = }')
+        if not sess_dict.get('sess_order'):
+    
+            if len(sessdirs) == 1:
+                sess_order = ['main']
 
-            # sess_order = input(f'provide pre,post, or main order {sessdirs = }')
-            print(f'{sess_order = }')
-            assert len(sess_order) == len(sessdirs) and all([e in ['pre','post','main'] for e in sess_order])
-        sess_dict['sess_order'] = sess_order
-        # return {'ephys_dir':sessdirs,f'{datatype_lbl}_dir':to_matchdirs, 'sess_order':sess_order}
+            elif len(sessdirs) == 3:
+                sess_order = ['pre','main','post']
+            else:
+                # sess_order = []
+                while not sess_order:
+                    try:
+                        _order = input(f'provide pre,post, or main order {sessdirs = }')
+                        _order = _order.split(',')
+                        print(f'{_order = }')
+                        if all([e in ['pre','post','main'] for e in _order]) and len(_order) == len(sessdirs):
+                            # print('valid')
+                            sess_order = _order
+                        else:
+                            print(f'bad input:{_order,sessdirs,to_matchdirs = }')
+                            print(f'{all([e in ["pre","post","main"] for e in _order]) = }')
+                            print(f'{len(_order)==len(sessdirs) = }')
+                            # print(f'{len(sessdirs) = }')
+                        assert len(sess_order) == len(sessdirs) and all([e in ['pre','post','main'] for e in sess_order])
+                    except:
+                        print('bad input try again')
+                        
+                # sess_order = input(f'provide pre,post, or main order {sessdirs = }')
+                print(f'{sess_order = }')
+            sess_dict['sess_order'] = sess_order
+
+        sess_dict['tdata_file'] = [None]*len(sess_order)
+        if datatype_lbl == 'tdata_file':
+            # print(f'LINE 152 {sess_dict = }')
+            cnt = 0
+            for i,sess_ord in enumerate(sess_dict['sess_order']):
+                if sess_ord == 'main':
+                    sess_dict['tdata_file'][i] = to_matchdirs[cnt]
+                    cnt += 1
+    # print(f'{[len(e) for _,e in sess_dict.items()] = }')
+    # print(f'{[_ for _,e in sess_dict.items()] = }')
+    # return {'ephys_dir':sessdirs,f'{datatype_lbl}_dir':to_matchdirs, 'sess_order':sess_order}
     return sess_dict
 
 
@@ -173,7 +203,7 @@ def match2tdata(sessdirs:list[Path],to_matchdirsss:list[list[Path]],datatype_lbl
                     print('invalid mapping, try again')
             print(f'{mapping = }')
             sessdirs = [sessdirs[e] for e in mapping[0]]
-            sess_dict['ephys_dir'] = None
+            # sess_dict['ephys_dir'] = None
             to_matchdirs = [to_matchdirs[e] for e in mapping[1]]
             dtype_name = f'{datatype_lbl}' if 'bin' in datatype_lbl else f'{datatype_lbl}_dir'
         sess_dict[f'{datatype_lbl}_dir' ] = to_matchdirs
@@ -222,6 +252,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     datadir = ceph_dir / posix_from_win(args.topdir)
     home_dir = Path(config[f'home_dir_{sys_os}'])
+    tdata_dir = home_dir/'data'/args.exp_name
+    assert tdata_dir.is_dir()
 
     projectdir = ceph_dir / posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test')
     assert datadir.is_dir() and projectdir.is_dir()
@@ -234,7 +266,6 @@ if __name__ == '__main__':
         sess_dirs = [e for e in sess_dirs if re.match(r'^[a-zA-Z]{2}\d{2}_.*_\d{3}$',e.stem)]
         assert all([re.match(r'^[a-zA-Z]{2}\d{2}_.*_\d{3}$',e.stem) for e in sess_dirs])  # test for valid session names
     elif args.datadir_lbl == 'tdata':
-        tdata_dir = home_dir/'data'/args.exp_name
         tdata_files_by_animal = [list((tdata_dir/animal/'TrialData').glob('*.csv')) for animal in animals]
         sess_dirs = sorted(sum(tdata_files_by_animal,[]))
     else:
@@ -243,7 +274,10 @@ if __name__ == '__main__':
     # unique_dates = set([extract_date(sess_dir.stem) for sess_dir in sess_dirs])
     unique_names = set([sess_dir.stem[:4] for sess_dir in sess_dirs])
     dirs2match = [ceph_dir / posix_from_win(r'X:\Dammy\mouse_pupillometry\mouse_hf'),
-                  ceph_dir / posix_from_win(r'X:\Dammy\harpbins')]
+                  ceph_dir / posix_from_win(r'X:\Dammy\harpbins'),]
+    if args.datadir_lbl == 'ephys':
+        tdata_files_by_animal = {animal: list((tdata_dir/animal/'TrialData').glob('*.csv')) for animal in animals}
+
     d_lbls = ['videos','beh_bin']
     d_patterns = ['*<name>_<date>_*', f'<name>_HitData_<date>*.bin']
     all_sess_topology_list = []
@@ -258,10 +292,11 @@ if __name__ == '__main__':
         old_sessions = []
 
     for name in unique_names:
-        # if name == 'DO79':
-        #     continue
+        if name == 'DO96':
+            continue
         name_ephys_dirs = [extract_date(e.stem) for e in sess_dirs if e.stem.startswith(name)]
         unique_dates = sorted(set(extract_date(e) for e in name_ephys_dirs))
+
         if args.datadir_lbl == 'ephys':
             sessions = [get_sessdirs(datadir, name, date)
                         for date in tqdm(unique_dates,total=len(unique_dates),desc=f'finding sessions {name}')
@@ -273,15 +308,22 @@ if __name__ == '__main__':
         else:
             raise NotImplementedError
         sessions = sorted(sessions)
+        sessions_dates = [extract_date(e[0].stem) for e in sessions]
 
         # ephys_sess = [e for e in ephys_sess if e]
         match_dir_dfs = []
         # for dir2match,d_lbl, d_pattern in zip(dirs2match,d_lbls,d_patterns):
-        print(old_sessions)
+        # print(old_sessions)
         sessions_by_date = [[get_sessdirs(dir2match,name,date,pattern=d_pattern)
                              for date in tqdm(unique_dates,total=len(unique_dates),desc=f'finding sessions {name}')
-                             if (name,date) not in old_sessions]
+                             if (name,date) not in old_sessions ]
                             for dir2match,d_lbl, d_pattern in zip(dirs2match,d_lbls,d_patterns)]
+        if args.datadir_lbl == 'ephys' and tdata_files_by_animal.get(name):
+            matched_tdata = [[e for e in tdata_files_by_animal[name] if date in e.name] for date in sessions_dates]
+            # print(f'{ sessions = }')
+            sessions_by_date.append(matched_tdata)
+            d_lbls.append('tdata_file')
+            d_patterns.append(f'<name>_TrialData_<date>*.csv')
         # sessions_by_date = [[ee for ee in e if ee] for e in sessions_by_date]
         sessions_by_date = pd.DataFrame(sessions_by_date).T.to_numpy().tolist()
 

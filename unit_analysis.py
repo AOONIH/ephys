@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 
-from ephys_analysis_funcs import plot_2d_array_with_subplots
+from plot_funcs import plot_2d_array_with_subplots
 
 
 def get_participation_rate(resp_mat: np.ndarray, resp_window: tuple | list, activity_window_S: list | tqdm,
@@ -25,7 +25,8 @@ def get_participation_rate(resp_mat: np.ndarray, resp_window: tuple | list, acti
 
 
 class UnitAnalysis:
-    def __init__(self,resp_dict:dict, stim_names: [str,], resp_window: [float,float]):
+    def __init__(self,resp_dict:dict, stim_names: list, resp_window: [float,float]):
+        self.participation_rate_by_sess_by_pip = None
         self.participation_rate_by_pip_arr = None
         self.participation_rate_by_pip = None
 
@@ -33,31 +34,60 @@ class UnitAnalysis:
 
         self.sessnames = list(resp_dict.keys())
         self.responses = resp_dict
-        self.stim_names = stim_names
+        self.stim_names: list = stim_names
 
         assert isinstance(resp_window, list)
-        assert len(resp_window) == 2 and all([isinstance(t, int) for t in resp_window])
+        assert len(resp_window) == 2 and all([isinstance(t, float) for t in resp_window])
         self.resp_window = resp_window
 
-    def get_participation_rate(self, activity_window_S:[float,float], active_threshold:float,
-                         sess_filt_kwargs=None, **kwargs):
-        assert isinstance(activity_window_S,list)
-        assert len(activity_window_S) == 2 and all([isinstance(t,float) for t in activity_window_S])
+    def get_participation_rate(self, activity_window_s:[float, float], active_threshold:float,
+                               **kwargs):
+        assert isinstance(activity_window_s, list)
+        assert len(activity_window_s) == 2 and all([isinstance(t, float) for t in activity_window_s])
 
-        assert isinstance(active_threshold,float)
+        assert isinstance(active_threshold,(float|int))
 
-        if sess_filt_kwargs is None:
-            sess_filt_kwargs = {}
-        animals = sess_filt_kwargs.get('animals')
-        active_units_by_pip = {pip: np.hstack([get_participation_rate(self.responses[sess][pip],
-                                                                      self.resp_window, activity_window_S, active_threshold,
-                                                                      max_func=kwargs.get('max_func',np.max))
-                                               for sess in self.responses
-                                               if (any(e in sess for e in animals) if animals else True)])
-                               for pip in self.stim_names}
 
-        self.participation_rate_by_pip = active_units_by_pip
+        participation_rate_by_pip = {pip: np.hstack([get_participation_rate(self.responses[sess][pip],
+                                                                            self.resp_window, activity_window_s,
+                                                                            active_threshold,
+                                                                            max_func=kwargs.get('max_func',np.max))
+                                                     for sess in self.responses])
+                                     for pip in self.stim_names}
+
+        self.participation_rate_by_pip = participation_rate_by_pip
         self.participation_rate_by_pip_arr = np.array(list(self.participation_rate_by_pip.values()))
+
+        participation_rate_by_sess_by_pip = {sess: {pip: get_participation_rate(self.responses[sess][pip],
+                                                                                self.resp_window, activity_window_s,
+                                                                                active_threshold,
+                                                                                max_func=kwargs.get('max_func',np.max))
+                                                     for pip in self.stim_names}
+                                               for sess in self.responses}
+        self.participation_rate_by_sess_by_pip = participation_rate_by_sess_by_pip
+
+    def filter_by_prc_rate(self, **kwargs):
+        prc_thresh = kwargs.get('prc_threshold', 0.5)
+
+        prc_pips = kwargs.get('prc_pips', self.stim_names)
+        if prc_pips is None:
+            prc_pips = self.stim_names
+        assert len(prc_pips) == len(self.stim_names)
+
+        if prc_thresh is None:
+            prc_thresh = 0.5
+
+        units_to_keep = {sess: {pip: self.participation_rate_by_sess_by_pip[sess][prc_pip] > prc_thresh
+                              for pip,prc_pip in zip(self.stim_names,prc_pips)}
+                        for sess in self.responses.keys()}
+        if kwargs.get('prc_mutual'):
+            units_to_keep = {sess: {pip:np.all(list(units_to_keep[sess].values()),axis=0)
+                                    for pip in units_to_keep[sess].keys()}
+                             for sess in units_to_keep.keys()}
+        subset_resp_dict = {sess: {pip:self.responses[sess][pip][:,units_to_keep[sess][pip]]
+                                    for pip in units_to_keep[sess].keys()}
+                             for sess in units_to_keep.keys()}
+        return subset_resp_dict
 
     def plot_participation_rate(self, plot_name:str, plot_kwargs=None, **r_maps_kwargs):
         if plot_kwargs is None:

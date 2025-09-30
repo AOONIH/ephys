@@ -16,12 +16,17 @@ from matplotlib.lines import Line2D
 from scipy.stats import ttest_ind, tukey_hsd, f_oneway
 from tqdm import tqdm
 
-from ephys_analysis_funcs import posix_from_win, Session, get_main_sess_patterns
+from pupil_analysis_funcs import process_pupil_td_data, init_pupil_td_obj
+from save_utils import save_stats_to_tex
+from sess_dataclasses import Session
+from io_utils import posix_from_win
+from plot_funcs import format_axis, plot_shaded_error_ts
 
 import yaml
 
 from behviour_analysis_funcs import get_sess_name_date_idx, sync_beh2sound, get_all_cond_filts, \
-    group_td_df_across_sessions, get_n_since_last, add_datetimecol, group_licks_across_sessions, filter_session
+    group_td_df_across_sessions, get_n_since_last, add_datetimecol, group_licks_across_sessions, filter_session, \
+    get_main_sess_patterns
 
 if __name__ == "__main__":
 
@@ -34,12 +39,18 @@ if __name__ == "__main__":
     home_dir = Path(config[f'home_dir_{sys_os}'])
     ceph_dir = Path(config[f'ceph_dir_{sys_os}'])
 
+    td_path_pattern = 'data/Hilde/<name>/TrialData'
+
+
     session_topology_paths  = [
         # ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology.csv'),
         ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_musc_may23.csv'),
         ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_ephys_2401.csv'),
+        ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_ephys_2504.csv'),
         ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_musc_sept23.csv'),
         ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_musc_2406.csv'),
+        ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_opto_2503.csv'),
+        ceph_dir/posix_from_win(r'X:\Dammy\Xdetection_mouse_hf_test\session_topology_ephys_2504.csv'),
     ]
     session_topology_dfs = [pd.read_csv(sess_topology_path) for sess_topology_path in session_topology_paths]
     # [df.set_index([cohort_i]*len(df),) for cohort_i, df in enumerate(session_topology_dfs)]
@@ -59,43 +70,59 @@ if __name__ == "__main__":
 
     # init session obj for td_df and sound
     sessions = {}
+    drug_sess_dict = {}
     for sess_i, sess_info in tqdm(all_sess_info.iterrows(), total=len(all_sess_info), desc='Getting sessions objs'):
-        sessname = Path(sess_info['sound_bin']).stem
-        sessname = sessname.replace('_SoundData','')
-        if sessname in list(sessions.keys()):
+        if not isinstance(sess_info['tdata_file'],(str,Path)):
             continue
-        sessions[sessname] = Session(sessname, ceph_dir)
-        name = sess_info['name']
-        date = sess_info['date']
 
-        if str(sess_info['tdata_file']) == 'nan':
-            td_path_pattern = 'data/Dammy/<name>/TrialData'
-            main_sess_td_name = Path(sess_info['sound_bin'].replace('_SoundData', '_TrialData')).with_suffix(
-                '.csv').name
+        sessname = Path(sess_info['sound_bin']).stem.replace('_SoundData', '')
+        print(sessname)
+        if sessname in sessions:
+            continue
 
-            td_path = td_path_pattern.replace('<name>', main_sess_td_name.split('_')[0])
-            abs_td_path_dir = home_dir / td_path
-            try:
-                abs_td_path = next(abs_td_path_dir.glob(f'{name}_TrialData_{date}*.csv'))
-            except StopIteration:
-                continue
-        else:
-            abs_td_path = Path(sess_info['tdata_file'])
-            abs_td_path = home_dir/Path(*abs_td_path.parts[-5:])
-        sessions[sessname].load_trial_data(abs_td_path)
+        print(f'initializing and processing td for {sessname}')
+        try:
+            init_pupil_td_obj(sessions, sessname, ceph_dir, all_sess_info, td_path_pattern, home_dir)
+        except Exception as e:
+            print(e)
+            continue
+        process_pupil_td_data(sessions, sessname, drug_sess_dict)
+
+        # sessname = sessname.replace('_SoundData','')
+        # if sessname in list(sessions.keys()):
+        #     continue
+        # sessions[sessname] = Session(sessname, ceph_dir)
+        # name = sess_info['name']
+        # date = sess_info['date']
+        #
+        # if str(sess_info['tdata_file']) == 'nan':
+        #     td_path_pattern = 'data/Dammy/<name>/TrialData'
+        #     main_sess_td_name = Path(sess_info['sound_bin'].replace('_SoundData', '_TrialData')).with_suffix(
+        #         '.csv').name
+        #
+        #     td_path = td_path_pattern.replace('<name>', main_sess_td_name.split('_')[0])
+        #     abs_td_path_dir = home_dir / td_path
+        #     try:
+        #         abs_td_path = next(abs_td_path_dir.glob(f'{name}_TrialData_{date}*.csv'))
+        #     except StopIteration:
+        #         continue
+        # else:
+        #     abs_td_path = Path(sess_info['tdata_file'])
+        #     abs_td_path = home_dir/Path(*abs_td_path.parts[-5:])
+        # sessions[sessname].load_trial_data(abs_td_path)
         filter_session(sessions, sessname, [2,3,4], {},filt4patt=False)
 
 
-    # format td_df
-    [sessions.pop(sessname) for sessname in list(sessions.keys()) if sessions[sessname].td_df.empty]
+    # # format td_df
+    # [sessions.pop(sessname) for sessname in list(sessions.keys()) if sessions[sessname].td_df.empty]
+    #
+    # [get_n_since_last(sess.td_df, 'Trial_Outcome', 0) for sess in sessions.values()]
+    # [add_datetimecol(all_sess_td_df, col) for col in ['Trial_Start', 'ToneTime', 'Trial_End', 'Gap_Time']]
+    #
+
     sessnames = list(sessions.keys())
-
-    [get_n_since_last(sess.td_df, 'Trial_Outcome', 0) for sess in sessions.values()]
-
     all_sess_td_df = group_td_df_across_sessions(sessions, sessnames)
-    [add_datetimecol(all_sess_td_df, col) for col in ['Trial_Start', 'ToneTime', 'Trial_End', 'Gap_Time']]
     all_sess_td_df['Early_Lick_bool'] = all_sess_td_df['Early_Licks'].astype(bool)
-
 
     #  figure 1: performance
     fig1_dir = ceph_dir / 'Dammy' / 'figures' / 'figure1_performance_w_ephys_mice'
@@ -113,8 +140,24 @@ if __name__ == "__main__":
     h_ratio = 0.33
     w_ratio = 0.33
 
+    boxplot_kwargs = dict(
+        widths=0.5,
+        patch_artist=True,
+        # showmeans=True,
+        showfliers=False,
+        medianprops=dict(lw=1),
+        # meanline=True,
+        meanprops=dict(mfc='k'),
+        boxprops=dict(lw=0.5),
+        whiskerprops=dict(lw=0.5),
+        capprops=dict(lw=0.5),
+        # whis=[5,95]
+    )
+
     patt_nonpatt_cols = ['dimgray','indigo']
     all_sess_performance_plot = plt.subplots()
+
+    cond_filts = get_all_cond_filts()
     good_trial_filt = 'Stage>=3 & n_since_last_Trial_Outcome <=5'
     td_df_by_tone_position = all_sess_td_df.query(good_trial_filt).groupby('Tone_Position')
     # all_sess_performance_plot[1].boxplot([df[1].groupby('sess')['Trial_Outcome'].mean()
@@ -123,7 +166,7 @@ if __name__ == "__main__":
     bxplot = all_sess_performance_plot[1].boxplot(
         all_sess_td_df.query(good_trial_filt+' & 20<trial_num<=250').groupby(['name', 'Tone_Position'])[
             'Trial_Outcome'].mean().unstack().dropna(axis=0)[[1, 0]],
-        labels=['Pattern', 'Non pattern'],showmeans=False, showfliers=False)
+        labels=['Pattern', 'Non pattern'],showmeans=False, showfliers=False,width=0.3)
     # for patch, color in zip(bxplot['boxes'], patt_nonpatt_cols):
     #     patch.set_facecolor(color)
     # all_sess_performance_plot[1].set_title('pattern vs non pattern trials')
@@ -149,6 +192,24 @@ if __name__ == "__main__":
             'Trial_Outcome'].mean().unstack().dropna(axis=0)[[1, 0]]
     ttest = ttest_ind(*[perf_by_tone_pos[e] for e in perf_by_tone_pos],alternative='two-sided')
     print(ttest)
+    save_stats_to_tex(ttest, fig1_dir / 'performance_by_tone_position_ttest.tex')
+
+    # plot performance as barplot
+    all_sess_perf_bar_plot = plt.subplots()
+    perf_data = all_sess_td_df.query('Stage>=3& 20<trial_num<=250').groupby(['name', 'Tone_Position'])[
+        'Trial_Outcome'].mean().unstack().dropna(axis=0)[[1, 0]].values
+    all_sess_perf_bar_plot[1].bar(['Pattern', 'Non pattern'], perf_data.mean(axis=0),
+                                  ec='black',fc='w',lw=0.5,width=0.4)
+    [all_sess_perf_bar_plot[1].scatter([cond]*len(cond_data), cond_data,facecolor=c,alpha=0.5,lw=0.01)
+     for cond,cond_data,c in zip(['Pattern', 'Non pattern'], perf_data.T,patt_nonpatt_cols)]
+    [all_sess_perf_bar_plot[1].plot(['Pattern', 'Non pattern'], a_data, lw=0.25, color='gray')
+     for a_data in perf_data]
+    all_sess_perf_bar_plot[1].set_ylim(.4,1.01)
+    format_axis(all_sess_perf_bar_plot[1])
+    all_sess_perf_bar_plot[1].set_ylabel('Hit rate')
+    all_sess_perf_bar_plot[0].set_size_inches(1.25,1.5)
+    all_sess_perf_bar_plot[0].show()
+    all_sess_perf_bar_plot[0].savefig(fig1_dir / 'performance_by_tone_position_barplot.pdf')
 
     # performance by tone onset time
     # add datetime column for Trial_Start and Tone_Time
@@ -164,7 +225,7 @@ if __name__ == "__main__":
         print(title)
         all_pattern_trials_df.loc[:, metric] = all_pattern_trials_df[metric].dt.total_seconds()
         all_pattern_trials_df.loc[:, f'{metric}_rounded'] = np.round(all_pattern_trials_df[metric])
-        pattern_trials_by_time_to = all_pattern_trials_df.groupby(['sess', f'{metric}_rounded'])[
+        pattern_trials_by_time_to = all_pattern_trials_df.groupby(['name', f'{metric}_rounded'])[
             'Trial_Outcome'].mean().unstack()
         times2use = all_pattern_trials_df[f'{metric}_rounded'].value_counts().where(
             lambda x: x > 0.03*len(all_pattern_trials_df)).dropna().index.sort_values().values
@@ -173,18 +234,19 @@ if __name__ == "__main__":
         pattern_trials_by_time_to = {t: pattern_trials_by_time_to[t].dropna() for t in times2use}
         patt_perf_by_time_to_plot = plt.subplots()
         bxplot = patt_perf_by_time_to_plot[1].boxplot(pattern_trials_by_time_to.values(),
-                                                           labels=times2use.astype(int), showmeans=False, showfliers=False)
-        # for patch, color in zip(bxplot['boxes'], boxplot_colours):
-        #     patch.set_facecolor(color)
+                                                           labels=times2use.astype(int), **boxplot_kwargs)
+        for patch, color in zip(bxplot['boxes'], boxplot_colours):
+            patch.set_facecolor('w')
         # x_label = ' '.join(metric.split('_')).replace('time','Time').replace('gap','X').replace('tone','pattern')
         # patt_perf_by_time_to_plot[1].set_title(title)
+        patt_perf_by_time_to_plot[1].set_ylim(0.5,1)
         patt_perf_by_time_to_plot[1].set_ylabel('Performance')
         patt_perf_by_time_to_plot[1].set_xlabel(x_label)
         patt_perf_by_time_to_plot[1].locator_params(axis='y', nbins=4)
         patt_perf_by_time_to_plot[0].set_layout_engine('tight')
-        # patt_perf_by_time_to_plot[0].show()
-        patt_perf_by_time_to_plot[0].set_size_inches(fig_width * w_ratio, fig_height * h_ratio)
-        # patt_perf_by_time_to_plot[0].savefig(fig1_dir / f'{"_".join(title.split(" "))}.pdf')
+        patt_perf_by_time_to_plot[0].set_size_inches(0.4*len(pattern_trials_by_time_to)+0.15, 1.5)
+        patt_perf_by_time_to_plot[0].show()
+        patt_perf_by_time_to_plot[0].savefig(fig1_dir / f'{"_".join(title.split(" "))}.pdf')
         tukey = tukey_hsd(*[e.values for e in pattern_trials_by_time_to.values()])
         print(f'{metric}: {tukey}')
 
@@ -196,12 +258,13 @@ if __name__ == "__main__":
 
     all_sess_td_df['reaction_time'] = all_sess_td_df['Trial_End_dt'] - all_sess_td_df['Gap_Time_dt']
     all_sess_td_df['reaction_time'] = all_sess_td_df['reaction_time'].dt.total_seconds()
-    all_sess_td_df[all_sess_td_df['Trial_Outcome']==0] = np.nan
+    # all_sess_td_df[all_sess_td_df['Trial_Outcome']==0] = np.nan
 
     all_correct_trials_df = all_sess_td_df.query('Stage>=3 & Trial_Outcome==1').copy()
     all_correct_trials_df.loc[:, 'reaction_time'] = all_correct_trials_df['Trial_End_dt'] - \
                                                     all_correct_trials_df['Gap_Time_dt']
     all_correct_trials_df.loc[:, 'reaction_time'] = all_correct_trials_df['reaction_time'].dt.total_seconds()
+
 
     for grouping,lbls,idxs ,title,plot_cols in zip(['Tone_Position', 'N_TonesPlayed'],
                                                    [['Pattern','Non pattern'],['AB','ABC','ABCD']],
@@ -209,21 +272,22 @@ if __name__ == "__main__":
                                                    ['Pattern vs non pattern trials','Number of tones played'],
                                                    [patt_nonpatt_cols, boxplot_colours]):
         all_correct_trials_df_plot = plt.subplots()
-        means_by_group = all_correct_trials_df.groupby(['sess', grouping])['reaction_time'].mean().unstack()[idxs]
+        means_by_group = all_correct_trials_df.groupby(['name', grouping])['reaction_time'].mean().unstack()[idxs]
         # remove nans
         means_by_group = means_by_group.dropna()
-        bxplot = all_correct_trials_df_plot[1].boxplot(means_by_group,labels=lbls, showmeans=False, showfliers=False)
+        bxplot = all_correct_trials_df_plot[1].boxplot(means_by_group,labels=lbls, **boxplot_kwargs)
         for patch, color in zip(bxplot['boxes'], plot_cols):
-            patch.set_facecolor(color)
+            patch.set_facecolor('white')
         all_correct_trials_df_plot[1].set_ylabel('Reaction Time (s)')
-        all_correct_trials_df_plot[1].set_ylim((-0.05, 1))
+        all_correct_trials_df_plot[1].set_ylim((0,0.5))
         # all_correct_trials_df_plot[1].set_title(title)
         all_correct_trials_df_plot[1].locator_params(axis='y', nbins=4)
         all_correct_trials_df_plot[0].set_layout_engine('tight')
+        all_correct_trials_df_plot[0].set_size_inches(1.8, 1.5)
         all_correct_trials_df_plot[0].show()
-        all_correct_trials_df_plot[0].set_size_inches(fig_width * w_ratio, fig_height * h_ratio)
-        # all_correct_trials_df_plot[0].savefig(fig1_dir / f'reaction_time_by_{grouping.lower()}.pdf')
+        all_correct_trials_df_plot[0].savefig(fig1_dir / f'reaction_time_by_{grouping.lower()}.pdf')
         tukey = tukey_hsd(*[means_by_group[e].values for e in means_by_group])
+        # save_stats_to_tex(tukey,fig1_dir/f'reaction_time_by_{grouping.lower()}.tex')
         print(f'{grouping}: {tukey}')
 
         # save plot data
@@ -341,7 +405,7 @@ if __name__ == "__main__":
     get_sess_objs = False
     sess_pkl_path = fig1_pkl_dir / 'sessions.pickle'
     if get_sess_objs:
-        for sessname in tqdm(sessions, total=len(sessions), desc='Getting sessions lick objs'):
+        for sessname in tqdm(list(sessions.keys()), total=len(sessions), desc='Getting sessions lick objs'):
             if sessions[sessname].lick_obj is not None:
                 continue
                 # pass
@@ -386,7 +450,11 @@ if __name__ == "__main__":
             if date < 240101:
                 sound_events_df = pd.read_csv(sound_events_path,nrows=1)
                 beh_events_44_df = pd.read_csv(beh_events_path_44,nrows=1)
-                sync_beh2sound(sessions[sessname].lick_obj, beh_events_44_df,sound_events_df)
+                try:
+                    sync_beh2sound(sessions[sessname].lick_obj, beh_events_44_df,sound_events_df)
+                except:
+                    # sessions.pop(sessname)
+                    continue
             try:
                 sessions[sessname].init_sound_event_dict(sound_write_path,patterns=main_patterns,normal_patterns=main_patterns)
             except:
@@ -405,10 +473,12 @@ if __name__ == "__main__":
     else:
         if sess_pkl_path.is_file():
             with open(sess_pkl_path, 'rb') as f:
-                sessions = pickle.load(f)
+                pass
+                # sessions = pickle.load(f)
         else:
-            sessions = {}
-            warnings.warn('Sessions pickle not found and not getting sessions.')
+            pass
+            # sessions = {}
+            # warnings.warn('Sessions pickle not found and not getting sessions.')
 
     # get all session licks into a single df
     # pickle sessions dict
@@ -437,8 +507,8 @@ if __name__ == "__main__":
         patt_non_patt_licks_df = pd.read_pickle(patt_non_patt_pkl_path)
     else:
         patt_non_patt_licks_df = (pd.concat(
-            {'non_patt': group_licks_across_sessions(sessions, sessnames, 'none', 'none', get_all_cond_filts()),
-             'patt': group_licks_across_sessions(sessions, sessnames, 'A', 'pattern', get_all_cond_filts())},
+            {'non_patt': group_licks_across_sessions(sessions, sessnames, 'none', 'none', cond_filts),
+             'patt': group_licks_across_sessions(sessions, sessnames, 'A', 'pattern', cond_filts)},
             axis=0, names=['trial_type']))
         with open(fig1_pkl_dir / 'patt_non_patt_licks_df.pkl', 'wb') as f:
             pickle.dump(patt_non_patt_licks_df, f)
@@ -448,18 +518,18 @@ if __name__ == "__main__":
         patt_non_patt2X_licks_df = pd.read_pickle(patt_non_patt2X_pkl_path)
     else:
         patt_non_patt2X_licks_df = (pd.concat(
-            {'non_patt': group_licks_across_sessions(sessions, sessnames, 'X', 'none', get_all_cond_filts()),
-             'patt': group_licks_across_sessions(sessions, sessnames, 'X', 'pattern', get_all_cond_filts())},
+            {'non_patt': group_licks_across_sessions(sessions, sessnames, 'X', 'none', cond_filts),
+             'patt': group_licks_across_sessions(sessions, sessnames, 'X', 'pattern', cond_filts)},
             axis=0, names=['trial_type']))
         with open(fig1_pkl_dir / 'patt_non_patt2X_licks_df.pkl', 'wb') as f:
             pickle.dump(patt_non_patt2X_licks_df, f)
 
     # plot
     patt_nonpatt_cols = ['dimgray','indigo']
-    x_ser = patt_non_patt_licks_df.columns.total_seconds()
+    x_ser = np.array(patt_non_patt_licks_df.columns.total_seconds()).astype(float)
     y_lim = patt_non_patt2X_licks_df.mean(level='trial_type').max().max()*1.2 # .quantile(0.99) # .quantile(0.98)
     y_lim = np.round(y_lim,1)
-    x_lim = (-1,1.5)
+    x_lim = (-.5,1.5)
     # patt vs non-patt 2 patt
     patt_non_patt_plot = plt.subplots()
     patt_non_patt_licks_by_type = patt_non_patt_licks_df.groupby(['trial_type','sess']).mean()
@@ -469,22 +539,23 @@ if __name__ == "__main__":
     # fill between sem
     mean_by_trial_type = patt_non_patt_licks_df.groupby(['trial_type','sess']).mean()
     sem_by_trial_type = patt_non_patt_licks_df.groupby(['trial_type','sess']).sem()
-    [patt_non_patt_plot[1].fill_between(x_ser, mean_by_trial_type.loc[trial_type].mean(axis=0) - sem_by_trial_type.loc[trial_type].mean(axis=0),
-                                        mean_by_trial_type.loc[trial_type].mean(axis=0) + sem_by_trial_type.loc[trial_type].mean(axis=0), color=patt_nonpatt_cols[type_i], alpha=0.1)
+    [plot_shaded_error_ts(patt_non_patt_plot[1],x_ser, mean_by_trial_type.loc[trial_type].mean(axis=0).values,
+                                                sem_by_trial_type.loc[trial_type].mean(axis=0).values,color=patt_nonpatt_cols[type_i], alpha=0.1)
      for type_i,(trial_type,lbls) in enumerate(zip(['non_patt','patt'],['non pattern','pattern']))]
     # patt_non_patt_plot[1].plot(x_ser, patt_non_patt_licks_by_type.mean(, label=['non-patt','patt'])
     # patt_non_patt_plot[1].set_title('licks to event onset ')
-    patt_non_patt_plot[1].legend()
+    # patt_non_patt_plot[1].legend()
     patt_non_patt_plot[1].locator_params(axis='both', nbins=4)
-    patt_non_patt_plot[1].set_ylabel('lick rate')
+    patt_non_patt_plot[1].set_ylabel('')
     patt_non_patt_plot[1].set_ylim(0,y_lim)
     patt_non_patt_plot[1].set_xlim(*x_lim)
     patt_non_patt_plot[1].xaxis.set_major_locator(tck.MultipleLocator())
     patt_non_patt_plot[1].axvline(0, ls='--', c='k')
-    patt_non_patt_plot[1].set_xlabel('time from event onset (s)')
-    patt_non_patt_plot[0].set_layout_engine('tight')
+    patt_non_patt_plot[1].set_xlabel('')
+    patt_non_patt_plot[0].set_size_inches(1.25,0.6)
+    patt_non_patt_plot[0].set_layout_engine('constrained')
     patt_non_patt_plot[0].show()
-    patt_non_patt_plot[0].set_size_inches(fig_width * w_ratio, fig_height * h_ratio)
+    # patt_non_patt_plot[0].set_size_inches(fig_width * w_ratio, fig_height * h_ratio)
     patt_non_patt_plot[0].savefig(fig1_dir / 'licks2A_by_trial_type.pdf', format='pdf')
 
     # save plot data
@@ -502,22 +573,24 @@ if __name__ == "__main__":
     # fill between sem
     mean_by_trial_type = patt_non_patt2X_licks_df.groupby(['trial_type','sess']).mean()
     sem_by_trial_type = patt_non_patt2X_licks_df.groupby(['trial_type','sess']).sem()
-    [patt_non_patt2X_plot[1].fill_between(x_ser, mean_by_trial_type.loc[trial_type].mean(axis=0) - sem_by_trial_type.loc[trial_type].mean(axis=0),
-                                          mean_by_trial_type.loc[trial_type].mean(axis=0) + sem_by_trial_type.loc[trial_type].mean(axis=0), color=patt_nonpatt_cols[type_i], alpha=0.1)
+    [plot_shaded_error_ts(patt_non_patt2X_plot[1],x_ser, mean_by_trial_type.loc[trial_type].mean(axis=0),
+                                                  sem_by_trial_type.loc[trial_type].mean(axis=0),color=patt_nonpatt_cols[type_i],
+                                                  alpha=0.1)
      for type_i,(trial_type,lbl) in enumerate(zip(['non_patt','patt'],['non pattern','pattern']))]
     # patt_non_patt_plot[1].plot(x_ser, patt_non_patt_licks_by_type.mean(, label=['non-patt','patt'])
     # patt_non_patt2X_plot[1].set_title('licks to X onset')
     # patt_non_patt2X_plot[1].legend()
-    patt_non_patt2X_plot[1].locator_params(axis='both', nbins=4)
-    patt_non_patt2X_plot[1].set_ylabel('lick rate')
+    format_axis(patt_non_patt2X_plot[1])
+    patt_non_patt2X_plot[1].set_ylabel('')
     patt_non_patt2X_plot[1].set_ylim(0,y_lim)
     patt_non_patt2X_plot[1].set_xlim(*x_lim)
     patt_non_patt2X_plot[1].xaxis.set_major_locator(tck.MultipleLocator())
-    patt_non_patt2X_plot[1].set_xlabel('time from X onset (s)')
+    patt_non_patt2X_plot[1].set_xlabel('')
     patt_non_patt2X_plot[1].axvline(0, ls='--', c='k')
-    patt_non_patt2X_plot[0].set_layout_engine('tight')
+    # patt_non_patt2X_plot[0].set_size_inches(fig_width * w_ratio, fig_height * h_ratio)
+    patt_non_patt2X_plot[0].set_size_inches(1.25,0.6)
+    patt_non_patt2X_plot[0].set_layout_engine('constrained')
     patt_non_patt2X_plot[0].show()
-    patt_non_patt2X_plot[0].set_size_inches(fig_width * w_ratio, fig_height * h_ratio)
     patt_non_patt2X_plot[0].savefig(fig1_dir / 'licks_by_trial_type_2X.pdf')
 
     # save plot data
@@ -542,8 +615,8 @@ if __name__ == "__main__":
         mutual_idxs = np.intersect1d(*[all_licks2event_by_cond.xs(cond,level='cond').index for cond in conds],)
         mutual_idxs = [e for e in mutual_idxs if any(n in e for n in ['DO79','DO80','DO81','DO82', 'DO83', 'DO84', 'DO85'])]
         # mutual_idxs = [e for e in mutual_idxs if not any(n in e for n in ['DO6'])]
-        [lick_plot[1].fill_between(x_ser, mean_by_cond[cond_i] - sem_by_cond[cond_i],
-                                    mean_by_cond[cond_i] + sem_by_cond[cond_i], color=line_colours[cond_i], alpha=0.1)
+        [plot_shaded_error_ts(lick_plot[1],x_ser, mean_by_cond[cond_i], sem_by_cond[cond_i],
+                                           color=line_colours[cond_i], alpha=0.1)
          for cond_i, cond in enumerate(conds)]
         peak_dist_by_cond = [all_licks2event_by_cond.xs(cond,level='cond').loc[mutual_idxs,timedelta(0):timedelta(1)].max(axis=1)
                              for cond in conds]
@@ -607,16 +680,13 @@ if __name__ == "__main__":
                   for cond_i, (cond, lick_sess_means) in enumerate(zip(['rare', 'frequent'],lick_sess_means_by_cond))]
                  for lick_sess_means_by_cond, drug_ls in zip(licks_sess_means_by_drug_by_cond, ['-', '--'])]
                 # fill between sem
-                [[lick_plot[1].fill_between(x_ser,
-                                            means.mean(axis=0) - sems,
-                                            means.mean(axis=0) + sems, fc=line_colours[cond_i], alpha=0.1)
+                [[plot_shaded_error_ts(lick_plot[1],x_ser,means.mean(axis=0),sems, fc=line_colours[cond_i], alpha=0.1)
                  for cond_i,(means,sems) in  enumerate(zip(mean4drug, sem4drug))]
                  for mean4drug, sem4drug in zip(licks_sess_means_by_drug_by_cond, licks_sess_sem_by_drug_by_cond)]
 
                 # mean_by_cond = [all_licks2event_by_cond.xs(cond, level='cond').mean(axis=0) for cond in conds]
                 # sem_by_cond = [all_licks2event_by_cond.xs(cond, level='cond').sem(axis=0) for cond in conds]
-                # [lick_plot[1].fill_between(x_ser, mean_by_cond[cond_i] - sem_by_cond[cond_i],
-                #                            mean_by_cond[cond_i] + sem_by_cond[cond_i], color=line_colours[cond_i], alpha=0.1)
+                # [plot_shaded_error_ts(lick_plot[1],x_ser, mean_by_cond[cond_i],sem_by_cond[cond_i],color=line_colours[cond_i], alpha=0.1)
                 #  for cond_i, cond in enumerate(conds)]
 
                 # lick_plot[1].set_title(f'lick rate to {event} onset')
@@ -664,6 +734,7 @@ if __name__ == "__main__":
                 perfomance_by_drug_plot[0].show()
                 metric_stattest = f_oneway(*[perf_by_tone_by_drug_df[e].dropna(axis=0) for e in perf_by_tone_by_drug_df])
                 print(metric, metric_stattest)
+                # save_stats_to_tex(metric_stattest, fig1_dir / f'{metric}_by_tone_position_by_drug.tex',)
                 tukey_test = tukey_hsd(*[perf_by_tone_by_drug_df[e].dropna(axis=0) for e in perf_by_tone_by_drug_df])
                 print(metric, tukey_test)
 
@@ -682,3 +753,4 @@ if __name__ == "__main__":
                      combinations(perf_by_tone_by_drug_df.columns,2)]
             for test,test_comb in zip(ttest,combinations(perf_by_tone_by_drug_df.columns,2)):
                 print(f'{test_comb}: {test}')
+                save_stats_to_tex(test, fig1_dir / f'ttest_{test_comb[0]}_vs_{test_comb[1]}.tex',)

@@ -12,7 +12,8 @@ from scipy.stats import ttest_ind, sem
 
 from aggregate_ephys_funcs import *
 from behviour_analysis_funcs import get_all_cond_filts
-from ephys_analysis_funcs import posix_from_win, plot_sorted_psth, format_axis, plot_2d_array_with_subplots
+from io_utils import posix_from_win
+from plot_funcs import plot_2d_array_with_subplots, plot_sorted_psth, format_axis
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()
@@ -77,9 +78,9 @@ if '__main__' == __name__:
 
     # get active units
     window = (-.5, 1)
-    event_responses_4_active_units = aggregate_event_reponses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
-                                                              events2exclude=['trial_start', ], window=window,
-                                                              pred_from_psth_kwargs={'use_unit_zscore': True,
+    event_responses_4_active_units = aggregate_event_responses(sessions, events=None,  # [f'{pip}-0' for pip in 'ABCD']
+                                                               events2exclude=['trial_start', ], window=window,
+                                                               pred_from_psth_kwargs={'use_unit_zscore': True,
                                                                                      'use_iti_zscore': False,
                                                                                      'baseline': 0, 'mean': None,
                                                                                      'mean_axis': 0})

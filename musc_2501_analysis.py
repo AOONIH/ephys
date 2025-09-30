@@ -1,10 +1,4 @@
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-
-from behviour_analysis_funcs import get_lick_in_patt_trials, group_td_df_across_sessions
-from scipy.stats import ttest_1samp
-from pupil_ephys_funcs import *
+from pupil_analysis_funcs import *
 
 if '__main__' == __name__:
     parser = argparse.ArgumentParser()
